@@ -79,8 +79,8 @@ struct PaneCueDashboardActions {
         (String, VoiceCommandIntent?) -> Void
     let savePlanCorrection:
         (String, WorkspacePlan) -> Void
-    let startCommandLabListening: () async throws -> Void
-    let stopCommandLabListening: () async throws -> String
+    let startCommandLabListening: @MainActor () async throws -> Void
+    let stopCommandLabListening: @MainActor () async throws -> String
     let cancelCommandLabListening: () -> Void
 }
 
