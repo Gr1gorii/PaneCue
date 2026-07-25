@@ -1,0 +1,38 @@
+{"text":"Разверни проект для работы, а Zoom оставь компактным","action":"apply_code_and_call"}
+{"text":"Пишу программу во время встречи, подготовь экран","action":"apply_code_and_call"}
+{"text":"IDE занимает всё, FaceTime оставь сбоку","action":"apply_code_and_call"}
+{"text":"I am coding while on Teams, arrange the workspace","action":"apply_code_and_call"}
+{"text":"Make the editor dominant with a tiny Webex call","action":"apply_code_and_call"}
+{"text":"Хочу сверяться с гайдом, пока меняю проект","action":"apply_documentation_and_code"}
+{"text":"Открой reference material вместе с terminal","action":"apply_documentation_and_code"}
+{"text":"Поставь API manual рядом с Cursor","action":"apply_documentation_and_code"}
+{"text":"Инструкция слева, редактор справа","action":"apply_documentation_and_code"}
+{"text":"Keep library docs next to my IDE","action":"apply_documentation_and_code"}
+{"text":"Открой Safari и блокнот для конспекта","action":"apply_notes_and_browser"}
+{"text":"Открой Firefox рядом с Bear","action":"apply_notes_and_browser"}
+{"text":"Хочу читать сайты и фиксировать идеи в Notion","action":"apply_notes_and_browser"}
+{"text":"Arrange web research with Obsidian on the side","action":"apply_notes_and_browser"}
+{"text":"Chrome основной, Craft для записей","action":"apply_notes_and_browser"}
+{"text":"Отдели текущий ролик от панели браузера","action":"show_browser_video"}
+{"text":"Оставь только кадр фильма поверх остальных окон","action":"show_browser_video"}
+{"text":"Pop the active player out into a clean overlay","action":"show_browser_video"}
+{"text":"Move the movie into a compact always-on-top view","action":"show_browser_video"}
+{"text":"Спрячь вкладку, но продолжай показывать плеер","action":"show_browser_video"}
+{"text":"Откати рабочее место до прошлого состояния","action":"restore_previous_layout"}
+{"text":"Верни приложения на прежние места","action":"restore_previous_layout"}
+{"text":"Undo PaneCue and recover my old window sizes","action":"restore_previous_layout"}
+{"text":"Cancel this arrangement and put everything back","action":"restore_previous_layout"}
+{"text":"Сбрось текущую раскладку окон","action":"restore_previous_layout"}
+{"text":"Сделай PyCharm главным, а Telegram узкой колонкой справа","action":"arrange_dynamic_workspace"}
+{"text":"Хочу VS Code 70 на 30 вместе с заметками","action":"arrange_dynamic_workspace"}
+{"text":"Размести Xcode на две трети экрана и Safari на оставшуюся треть","action":"arrange_dynamic_workspace"}
+{"text":"Keep Arc almost full screen and Bear compact on the left","action":"arrange_dynamic_workspace"}
+{"text":"Покажи Finder сверху, а Terminal снизу","action":"arrange_dynamic_workspace"}
+{"text":"Можно ли поставить Figma рядом со Slack?","action":"no_action"}
+{"text":"Может быть потом откроем Arc и Bear","action":"no_action"}
+{"text":"Я просто рассказываю, как пишу код во время звонка","action":"no_action"}
+{"text":"Please don't arrange Chrome and Obsidian","action":"no_action"}
+{"text":"What is the best layout for two windows?","action":"no_action"}
+{"text":"Сделай кофе и напомни мне через десять минут","action":"no_action"}
+{"text":"Maybe later put Xcode beside Safari","action":"no_action"}
+{"text":"Не меняй ничего, даже если открыт браузер с видео","action":"no_action"}

@@ -1,0 +1,25 @@
+model: google/functiongemma-270m-it
+train: true
+fine_tune_type: lora
+optimizer: adamw
+data: training/data
+seed: 42
+num_layers: -1
+batch_size: 4
+grad_accumulation_steps: 1
+iters: 400
+val_batches: 20
+learning_rate: 0.00005
+steps_per_report: 10
+steps_per_eval: 100
+adapter_path: training/adapters/functiongemma-270m-panecue
+save_every: 100
+test: false
+test_batches: 30
+max_seq_length: 768
+grad_checkpoint: false
+mask_prompt: true
+lora_parameters:
+  rank: 16
+  dropout: 0.05
+  scale: 32.0

@@ -1,0 +1,1513 @@
+import AppKit
+@preconcurrency import AVFoundation
+import CoreGraphics
+import PaneCueCore
+@preconcurrency import Speech
+import SwiftUI
+
+enum PaneCueDashboardSection: String, CaseIterable, Identifiable {
+    case overview
+    case commandLab
+    case scenarios
+    case settings
+
+    var id: Self {
+        self
+    }
+
+    var title: String {
+        switch self {
+        case .overview:
+            return "Overview"
+        case .commandLab:
+            return "Command Lab"
+        case .scenarios:
+            return "Custom Scenarios"
+        case .settings:
+            return "Settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview:
+            return "rectangle.grid.2x2"
+        case .commandLab:
+            return "waveform.badge.magnifyingglass"
+        case .scenarios:
+            return "rectangle.split.2x1"
+        case .settings:
+            return "gearshape"
+        }
+    }
+}
+
+enum PaneCuePrivacyPane {
+    case screenRecording
+    case microphone
+    case speechRecognition
+}
+
+struct PaneCueDashboardSnapshot {
+    let statusMessage: String
+    let activeScenarioName: String?
+    let voiceState: RealtimeVoiceCommandController.State
+    let canRestore: Bool
+    let isAutoModeEnabled: Bool
+}
+
+struct PaneCueDashboardActions {
+    let runBuiltIn: (VoiceCommandAction) -> Void
+    let runCustom: (UUID) -> Void
+    let restore: () -> Void
+    let toggleVoice: () -> Void
+    let configureAPIKey: () -> Void
+    let requestAccessibility: () -> Void
+    let requestScreenRecordingAccess: () -> Void
+    let requestMicrophoneAccess: () -> Void
+    let requestSpeechRecognitionAccess: () -> Void
+    let openPrivacyPane: (PaneCuePrivacyPane) -> Void
+    let setAutoModeEnabled: (Bool) -> Void
+    let scenariosDidChange: () -> Void
+    let analyzeCommand:
+        (String, WorkspacePlan?) async throws -> CommandLabAnalysis
+    let applyAnalyzedCommand:
+        (VoiceCommandIntent) async throws -> String
+    let applyWorkspacePlan:
+        (WorkspacePlan) async throws -> String
+    let saveCommandCorrection:
+        (String, VoiceCommandIntent?) -> Void
+    let savePlanCorrection:
+        (String, WorkspacePlan) -> Void
+    let startCommandLabListening: () async throws -> Void
+    let stopCommandLabListening: () async throws -> String
+    let cancelCommandLabListening: () -> Void
+}
+
+@MainActor
+final class PaneCueDashboardModel: ObservableObject {
+    @Published var selectedSection: PaneCueDashboardSection = .overview
+    @Published private(set) var scenarios: [CustomScenario]
+    @Published private(set) var statusMessage = "Ready"
+    @Published private(set) var activeScenarioName: String?
+    @Published private(set) var voiceState:
+        RealtimeVoiceCommandController.State = .idle
+    @Published private(set) var canRestore = false
+    @Published private(set) var hasAccessibilityPermission = false
+    @Published private(set) var hasScreenRecordingPermission = false
+    @Published private(set) var microphoneAuthorizationStatus =
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    @Published private(set) var speechRecognitionAuthorizationStatus =
+        SFSpeechRecognizer.authorizationStatus()
+    @Published private(set) var hasAPIKey = false
+    @Published private(set) var isAutoModeEnabled = false
+    @Published private(set) var editorRevision = 0
+    @Published var isOnboardingPresented: Bool
+
+    let applications: [InstalledApplication]
+    let aiSettings: AIEngineSettingsStore
+    let connectivity: ConnectivityMonitor
+    let offlinePack: OfflinePackManager
+
+    private let store: CustomScenarioStore
+    private let keyStore: OpenAIAPIKeyStore
+    private let actions: PaneCueDashboardActions
+    private let defaults: UserDefaults
+
+    private static let onboardingVersion = 1
+    private static let onboardingVersionKey =
+        "PaneCue.Onboarding.completedVersion"
+
+    var hasMicrophonePermission: Bool {
+        microphoneAuthorizationStatus == .authorized
+    }
+
+    var microphoneActionTitle: String {
+        microphoneAuthorizationStatus == .notDetermined
+            ? "Request Access"
+            : "Open Settings"
+    }
+
+    var hasSpeechRecognitionPermission: Bool {
+        speechRecognitionAuthorizationStatus == .authorized
+    }
+
+    var speechRecognitionActionTitle: String {
+        speechRecognitionAuthorizationStatus == .notDetermined
+            ? "Request Access"
+            : "Open Settings"
+    }
+
+    init(
+        store: CustomScenarioStore,
+        keyStore: OpenAIAPIKeyStore,
+        aiSettings: AIEngineSettingsStore,
+        connectivity: ConnectivityMonitor,
+        offlinePack: OfflinePackManager,
+        defaults: UserDefaults = .standard,
+        actions: PaneCueDashboardActions
+    ) {
+        self.store = store
+        self.keyStore = keyStore
+        self.aiSettings = aiSettings
+        self.connectivity = connectivity
+        self.offlinePack = offlinePack
+        self.defaults = defaults
+        self.actions = actions
+        isOnboardingPresented =
+            defaults.integer(forKey: Self.onboardingVersionKey)
+                < Self.onboardingVersion
+        scenarios = store.scenarios
+        applications = ApplicationCatalog.installedApplications()
+        refreshPermissions()
+    }
+
+    func update(_ snapshot: PaneCueDashboardSnapshot) {
+        statusMessage = snapshot.statusMessage
+        activeScenarioName = snapshot.activeScenarioName
+        voiceState = snapshot.voiceState
+        canRestore = snapshot.canRestore
+        isAutoModeEnabled = snapshot.isAutoModeEnabled
+        refreshPermissions()
+    }
+
+    func refreshPermissions() {
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+        microphoneAuthorizationStatus =
+            AVCaptureDevice.authorizationStatus(for: .audio)
+        speechRecognitionAuthorizationStatus =
+            SFSpeechRecognizer.authorizationStatus()
+        hasAPIKey = keyStore.hasKey
+    }
+
+    func openScenarios() {
+        editorRevision += 1
+        selectedSection = .scenarios
+    }
+
+    func saveScenarios(_ updatedScenarios: [CustomScenario]) {
+        store.replaceAll(with: updatedScenarios)
+        scenarios = store.scenarios
+        editorRevision += 1
+        actions.scenariosDidChange()
+        selectedSection = .overview
+    }
+
+    func runBuiltIn(_ action: VoiceCommandAction) {
+        actions.runBuiltIn(action)
+    }
+
+    func runCustom(_ scenario: CustomScenario) {
+        actions.runCustom(scenario.id)
+    }
+
+    func restore() {
+        actions.restore()
+    }
+
+    func toggleVoice() {
+        actions.toggleVoice()
+    }
+
+    func configureAPIKey() {
+        actions.configureAPIKey()
+    }
+
+    func requestAccessibility() {
+        actions.requestAccessibility()
+    }
+
+    func requestScreenRecordingAccess() {
+        actions.requestScreenRecordingAccess()
+    }
+
+    func requestMicrophoneAccess() {
+        actions.requestMicrophoneAccess()
+    }
+
+    func requestSpeechRecognitionAccess() {
+        actions.requestSpeechRecognitionAccess()
+    }
+
+    func openPrivacyPane(_ pane: PaneCuePrivacyPane) {
+        actions.openPrivacyPane(pane)
+    }
+
+    func presentOnboarding() {
+        refreshPermissions()
+        isOnboardingPresented = true
+    }
+
+    func completeOnboarding() {
+        defaults.set(
+            Self.onboardingVersion,
+            forKey: Self.onboardingVersionKey
+        )
+        isOnboardingPresented = false
+        selectedSection = .overview
+    }
+
+    func setAutoModeEnabled(_ enabled: Bool) {
+        actions.setAutoModeEnabled(enabled)
+    }
+
+    func analyzeCommand(
+        _ transcript: String,
+        currentPlan: WorkspacePlan?
+    ) async throws -> CommandLabAnalysis {
+        try await actions.analyzeCommand(
+            transcript,
+            currentPlan
+        )
+    }
+
+    func applyAnalyzedCommand(
+        _ intent: VoiceCommandIntent
+    ) async throws -> String {
+        try await actions.applyAnalyzedCommand(intent)
+    }
+
+    func applyWorkspacePlan(
+        _ plan: WorkspacePlan
+    ) async throws -> String {
+        try await actions.applyWorkspacePlan(plan)
+    }
+
+    func saveCommandCorrection(
+        transcript: String,
+        intent: VoiceCommandIntent?
+    ) {
+        actions.saveCommandCorrection(
+            transcript,
+            intent
+        )
+    }
+
+    func savePlanCorrection(
+        transcript: String,
+        plan: WorkspacePlan
+    ) {
+        actions.savePlanCorrection(transcript, plan)
+    }
+
+    func saveWorkspacePlan(
+        _ plan: WorkspacePlan,
+        name: String
+    ) throws -> String {
+        guard let scenario = plan.scenario(named: name) else {
+            throw PaneCueWindowError.operationFailed(
+                details: "A saved scenario needs a name and at least two windows."
+            )
+        }
+        var updated = scenarios
+        if let index = updated.firstIndex(where: {
+            $0.name.caseInsensitiveCompare(scenario.name)
+                == .orderedSame
+        }) {
+            var replacement = scenario
+            replacement.id = updated[index].id
+            updated[index] = replacement
+        } else {
+            updated.append(scenario)
+        }
+        store.replaceAll(with: updated)
+        scenarios = store.scenarios
+        editorRevision += 1
+        actions.scenariosDidChange()
+        return "Saved “\(scenario.name)”"
+    }
+
+    func startCommandLabListening() async throws {
+        try await actions.startCommandLabListening()
+    }
+
+    func stopCommandLabListening() async throws -> String {
+        try await actions.stopCommandLabListening()
+    }
+
+    func cancelCommandLabListening() {
+        actions.cancelCommandLabListening()
+    }
+}
+
+@MainActor
+final class MainWindowController {
+    let model: PaneCueDashboardModel
+
+    private let windowController: NSWindowController
+
+    init(
+        store: CustomScenarioStore,
+        keyStore: OpenAIAPIKeyStore,
+        aiSettings: AIEngineSettingsStore,
+        connectivity: ConnectivityMonitor,
+        offlinePack: OfflinePackManager,
+        actions: PaneCueDashboardActions
+    ) {
+        model = PaneCueDashboardModel(
+            store: store,
+            keyStore: keyStore,
+            aiSettings: aiSettings,
+            connectivity: connectivity,
+            offlinePack: offlinePack,
+            actions: actions
+        )
+
+        let rootView = PaneCueDashboardView(model: model)
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: 1_020,
+                height: 680
+            ),
+            styleMask: [
+                .titled,
+                .closable,
+                .miniaturizable,
+                .resizable,
+                .fullSizeContentView
+            ],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "PaneCue"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.toolbarStyle = .unified
+        window.contentViewController = hostingController
+        window.minSize = NSSize(width: 860, height: 570)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
+        window.setFrameAutosaveName("PaneCue.MainWindow")
+
+        windowController = NSWindowController(window: window)
+    }
+
+    func show(
+        section: PaneCueDashboardSection = .overview
+    ) {
+        if section == .scenarios {
+            model.openScenarios()
+        } else {
+            model.selectedSection = section
+        }
+        model.refreshPermissions()
+
+        NSApp.activate(ignoringOtherApps: true)
+        windowController.showWindow(nil)
+        windowController.window?.makeKeyAndOrderFront(nil)
+    }
+
+    func update(_ snapshot: PaneCueDashboardSnapshot) {
+        model.update(snapshot)
+    }
+
+    func refreshPermissions() {
+        model.refreshPermissions()
+    }
+}
+
+private enum PaneCueBuiltInScenario: CaseIterable, Identifiable {
+    case codeAndCall
+    case documentationAndCode
+    case notesAndBrowser
+    case browserVideo
+
+    var id: Self {
+        self
+    }
+
+    var action: VoiceCommandAction {
+        switch self {
+        case .codeAndCall:
+            return .applyCodeAndCall
+        case .documentationAndCode:
+            return .applyDocumentationAndCode
+        case .notesAndBrowser:
+            return .applyNotesAndBrowser
+        case .browserVideo:
+            return .showBrowserVideo
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .codeAndCall:
+            return "Code + Call"
+        case .documentationAndCode:
+            return "Documentation + Code"
+        case .notesAndBrowser:
+            return "Notes + Browser"
+        case .browserVideo:
+            return "Browser Video"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .codeAndCall:
+            return "Keep the editor dominant and float the call video."
+        case .documentationAndCode:
+            return "Place reference material beside your code."
+        case .notesAndBrowser:
+            return "Research in the browser and capture notes alongside it."
+        case .browserVideo:
+            return "Extract the player from the active browser window."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .codeAndCall:
+            return "video.badge.ellipsis"
+        case .documentationAndCode:
+            return "book.pages"
+        case .notesAndBrowser:
+            return "note.text"
+        case .browserVideo:
+            return "play.rectangle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .codeAndCall:
+            return .purple
+        case .documentationAndCode:
+            return .blue
+        case .notesAndBrowser:
+            return .orange
+        case .browserVideo:
+            return .pink
+        }
+    }
+}
+
+private struct PaneCueDashboardView: View {
+    @ObservedObject var model: PaneCueDashboardModel
+
+    var body: some View {
+        Group {
+            if model.isOnboardingPresented {
+                PaneCueOnboardingView(model: model)
+            } else {
+                dashboard
+            }
+        }
+        .frame(minWidth: 860, minHeight: 570)
+    }
+
+    private var dashboard: some View {
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(
+                    min: 188,
+                    ideal: 212,
+                    max: 240
+                )
+        } detail: {
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background {
+                    LinearGradient(
+                        colors: [
+                            Color(nsColor: .windowBackgroundColor),
+                            Color.accentColor.opacity(0.035)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .ignoresSafeArea()
+                }
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            List(
+                PaneCueDashboardSection.allCases,
+                selection: $model.selectedSection
+            ) { section in
+                Label(section.title, systemImage: section.systemImage)
+                    .tag(section)
+            }
+            .listStyle(.sidebar)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(
+                            model.hasAccessibilityPermission
+                                ? Color.green
+                                : Color.orange
+                        )
+                        .frame(width: 8, height: 8)
+                    Text(
+                        model.hasAccessibilityPermission
+                            ? "Window control ready"
+                            : "Permission needed"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+
+                Button {
+                    model.toggleVoice()
+                } label: {
+                    Label(
+                        model.voiceState == .listening
+                            ? "Run Voice Command"
+                            : "Voice Command",
+                        systemImage: model.voiceState == .listening
+                            ? "waveform"
+                            : "mic"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.voiceState == .processing)
+
+                Text("⌥ Space")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(14)
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch model.selectedSection {
+        case .overview:
+            PaneCueOverviewView(model: model)
+        case .commandLab:
+            CommandLabView(model: model)
+        case .scenarios:
+            ScenarioEditorView(
+                initialScenarios: model.scenarios,
+                applications: model.applications,
+                onSave: { model.saveScenarios($0) },
+                onClose: {
+                    model.selectedSection = .overview
+                }
+            )
+            .id(model.editorRevision)
+        case .settings:
+            PaneCueSettingsView(
+                model: model,
+                aiSettings: model.aiSettings,
+                connectivity: model.connectivity,
+                offlinePack: model.offlinePack
+            )
+        }
+    }
+}
+
+private struct PaneCueOverviewView: View {
+    @ObservedObject var model: PaneCueDashboardModel
+    @State private var brandIconRevision = UUID()
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16)
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                header
+                statusRow
+                AutoModeCard(model: model)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle(
+                        "Quick Scenarios",
+                        detail: "One click arranges the workspace."
+                    )
+
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(PaneCueBuiltInScenario.allCases) { scenario in
+                            BuiltInScenarioCard(scenario: scenario) {
+                                model.runBuiltIn(scenario.action)
+                            }
+                        }
+                    }
+                }
+
+                customScenarios
+            }
+            .padding(.horizontal, 30)
+            .padding(.top, 28)
+            .padding(.bottom, 34)
+            .frame(maxWidth: 920, alignment: .leading)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .paneCueAppIconDidChange
+            )
+        ) { _ in
+            brandIconRevision = UUID()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 18) {
+            Image(nsImage: PaneCueBrandAssets.appIcon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .id(brandIconRevision)
+                .frame(width: 62, height: 62)
+                .shadow(
+                    color: Color.blue.opacity(0.2),
+                    radius: 14,
+                    y: 7
+                )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("PaneCue")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                Text("Your workspace, ready for what comes next.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if model.canRestore {
+                Button {
+                    model.restore()
+                } label: {
+                    Label("Restore Layout", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
+        }
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 12) {
+            StatusChip(
+                title: "Window Control",
+                detail: model.hasAccessibilityPermission
+                    ? "Ready"
+                    : "Needs access",
+                systemImage: "macwindow",
+                tint: model.hasAccessibilityPermission ? .green : .orange
+            )
+            StatusChip(
+                title: "Voice",
+                detail: model.hasAPIKey
+                    ? (
+                        model.hasMicrophonePermission
+                            ? "Ready"
+                            : "Key saved"
+                    )
+                    : "Setup needed",
+                systemImage: "waveform",
+                tint: model.hasAPIKey ? .blue : .orange
+            )
+            StatusChip(
+                title: "Video",
+                detail: model.hasScreenRecordingPermission
+                    ? "Ready"
+                    : "Needs access",
+                systemImage: "play.rectangle",
+                tint: model.hasScreenRecordingPermission ? .pink : .orange
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var customScenarios: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle(
+                    "Custom Scenarios",
+                    detail: model.scenarios.isEmpty
+                        ? "Create a workspace around your own apps."
+                        : "\(model.scenarios.count) saved"
+                )
+
+                Spacer()
+
+                Button {
+                    model.openScenarios()
+                } label: {
+                    Label(
+                        model.scenarios.isEmpty ? "Create" : "Edit",
+                        systemImage: model.scenarios.isEmpty
+                            ? "plus"
+                            : "slider.horizontal.3"
+                    )
+                }
+            }
+
+            if model.scenarios.isEmpty {
+                Button {
+                    model.openScenarios()
+                } label: {
+                    HStack(spacing: 16) {
+                        Image(systemName: "plus.rectangle.on.rectangle")
+                            .font(.system(size: 26))
+                            .foregroundStyle(Color.accentColor)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Build your first scenario")
+                                .font(.headline)
+                            Text(
+                                "Choose two applications and decide how much space each one gets."
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 16)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.primary.opacity(0.08))
+                }
+            } else {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(model.scenarios) { scenario in
+                        CustomScenarioCard(scenario: scenario) {
+                            model.runCustom(scenario)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionTitle(
+        _ title: String,
+        detail: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.title2.weight(.semibold))
+            Text(detail)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct BuiltInScenarioCard: View {
+    let scenario: PaneCueBuiltInScenario
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 15) {
+                HStack {
+                    Image(systemName: scenario.systemImage)
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(scenario.tint)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            scenario.tint.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 11)
+                        )
+
+                    Spacer()
+
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(scenario.tint)
+                        .frame(width: 30, height: 30)
+                        .background(
+                            scenario.tint.opacity(0.1),
+                            in: Circle()
+                        )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(scenario.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(scenario.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 148, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 17)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 17)
+                .stroke(scenario.tint.opacity(0.16))
+        }
+    }
+}
+
+private struct CustomScenarioCard: View {
+    let scenario: CustomScenario
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ScenarioMiniature(windows: scenario.windows)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(scenario.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(
+                        "\(scenario.windows.count) windows · \(scenario.windows.map(\.target.displayName).joined(separator: " + "))"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+
+                Spacer()
+                Image(systemName: "play.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 14)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.primary.opacity(0.08))
+        }
+    }
+}
+
+private struct ScenarioMiniature: View {
+    let windows: [ScenarioWindowSlot]
+
+    private var visibleWindows: [ScenarioWindowSlot] {
+        let main = windows.filter { $0.display == .main }
+        return main.isEmpty ? windows : main
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.accentColor.opacity(0.07))
+
+                ForEach(
+                    Array(visibleWindows.enumerated()),
+                    id: \.element.id
+                ) { index, window in
+                    let rect = window.gridRect.normalized
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(
+                            Color.accentColor.opacity(
+                                index == 0 ? 0.9 : 0.28
+                            )
+                        )
+                        .frame(
+                            width: max(
+                                geometry.size.width * rect.width - 2,
+                                3
+                            ),
+                            height: max(
+                                geometry.size.height * rect.height - 2,
+                                3
+                            )
+                        )
+                        .position(
+                            x: geometry.size.width
+                                * (rect.x + rect.width / 2),
+                            y: geometry.size.height
+                                * (rect.y + rect.height / 2)
+                        )
+                }
+            }
+        }
+        .frame(width: 52, height: 34)
+    }
+}
+
+private struct StatusChip: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.11), in: Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(detail)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 13)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13)
+                .stroke(Color.primary.opacity(0.07))
+        }
+    }
+}
+
+private struct AutoModeCard: View {
+    @ObservedObject var model: PaneCueDashboardModel
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "sparkles.rectangle.stack.fill")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(.purple)
+                .frame(width: 44, height: 44)
+                .background(
+                    Color.purple.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 13)
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Auto Mode")
+                        .font(.headline)
+                    Text(model.isAutoModeEnabled ? "WATCHING" : "OFF")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(
+                            model.isAutoModeEnabled
+                                ? Color.purple
+                                : Color.secondary
+                        )
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            (
+                                model.isAutoModeEnabled
+                                    ? Color.purple
+                                    : Color.secondary
+                            )
+                            .opacity(0.1),
+                            in: Capsule()
+                        )
+                }
+
+                Text(
+                    "Suggests a layout from the apps you switch between. Nothing moves until you approve it."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { model.isAutoModeEnabled },
+                    set: { model.setAutoModeEnabled($0) }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.large)
+        }
+        .padding(18)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 17)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 17)
+                .stroke(Color.purple.opacity(0.16))
+        }
+    }
+}
+
+private struct PaneCueSettingsView: View {
+    @ObservedObject var model: PaneCueDashboardModel
+    @ObservedObject var aiSettings: AIEngineSettingsStore
+    @ObservedObject var connectivity: ConnectivityMonitor
+    @ObservedObject var offlinePack: OfflinePackManager
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Settings")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text(
+                        "PaneCue asks only when a feature needs access. Nothing is requested at launch."
+                    )
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                }
+
+                SettingsGroup(
+                    title: "Permissions",
+                    detail: "Access stays under your control in macOS."
+                ) {
+                    PermissionRow(
+                        title: "Window Control",
+                        detail: "Arrange and restore application windows",
+                        systemImage: "macwindow",
+                        isGranted: model.hasAccessibilityPermission,
+                        actionTitle: "Grant Access"
+                    ) {
+                        model.requestAccessibility()
+                    }
+
+                    Divider()
+
+                    PermissionRow(
+                        title: "Screen Recording",
+                        detail: "Extract call and browser video",
+                        systemImage: "record.circle",
+                        isGranted: model.hasScreenRecordingPermission,
+                        actionTitle: "Grant Access"
+                    ) {
+                        model.requestScreenRecordingAccess()
+                    }
+
+                    Divider()
+
+                    PermissionRow(
+                        title: "Microphone",
+                        detail: "Listen only while a voice command is active",
+                        systemImage: "mic",
+                        isGranted: model.hasMicrophonePermission,
+                        actionTitle: model.microphoneActionTitle
+                    ) {
+                        model.requestMicrophoneAccess()
+                    }
+
+                    Divider()
+
+                    PermissionRow(
+                        title: "Speech Recognition",
+                        detail: "Transcribe commands locally without internet",
+                        systemImage: "waveform.and.mic",
+                        isGranted: model.hasSpeechRecognitionPermission,
+                        actionTitle: model.speechRecognitionActionTitle
+                    ) {
+                        model.requestSpeechRecognitionAccess()
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Guided Setup",
+                        detail: "Review these permissions one at a time",
+                        systemImage: "checklist",
+                        statusColor: .blue
+                    ) {
+                        Button("Run Setup…") {
+                            model.presentOnboarding()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                SettingsGroup(
+                    title: "AI Processing",
+                    detail: "Choose when PaneCue may use the cloud."
+                ) {
+                    SettingRow(
+                        title: "Processing Mode",
+                        detail: aiSettings.processingMode.detail,
+                        systemImage: processingModeIcon,
+                        statusColor: processingModeColor
+                    ) {
+                        Picker(
+                            "Processing Mode",
+                            selection: $aiSettings.processingMode
+                        ) {
+                            ForEach(
+                                AIProcessingMode.allCases,
+                                id: \.self
+                            ) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 175)
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Connection",
+                        detail: connectivity.isOnline
+                            ? "Cloud services are available"
+                            : "PaneCue will remain fully local",
+                        systemImage: connectivity.isOnline
+                            ? "network"
+                            : "network.slash",
+                        statusColor: connectivity.isOnline
+                            ? .green
+                            : .blue
+                    ) {
+                        Text(connectivity.isOnline ? "Online" : "Offline")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(
+                                connectivity.isOnline ? .green : .blue
+                            )
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Local Command Model",
+                        detail: aiSettings.localCommandModel.detail,
+                        systemImage: "cpu",
+                        statusColor: .blue
+                    ) {
+                        Picker(
+                            "Local Command Model",
+                            selection: $aiSettings.localCommandModel
+                        ) {
+                            ForEach(
+                                LocalCommandModel.allCases,
+                                id: \.self
+                            ) { localModel in
+                                Text(localModel.displayName)
+                                    .tag(localModel)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 175)
+                        .disabled(aiSettings.processingMode == .cloud)
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Offline Pack",
+                        detail: offlinePack.statusText,
+                        systemImage: "internaldrive",
+                        statusColor: offlinePackColor
+                    ) {
+                        offlinePackControl
+                    }
+                }
+
+                SettingsGroup(
+                    title: "Voice Commands",
+                    detail: "Use Russian or English with the global shortcut."
+                ) {
+                    SettingRow(
+                        title: "OpenAI API Key",
+                        detail: model.hasAPIKey
+                            ? "Saved securely in macOS Keychain"
+                            : "Required only for Cloud mode",
+                        systemImage: "key.fill",
+                        statusColor: model.hasAPIKey ? .green : .orange
+                    ) {
+                        Button(model.hasAPIKey ? "Replace…" : "Add Key…") {
+                            model.configureAPIKey()
+                        }
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Shortcut",
+                        detail: "Press once to listen, then again to run",
+                        systemImage: "keyboard",
+                        statusColor: .blue
+                    ) {
+                        Text("⌥ Space")
+                            .font(.body.monospaced().weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                Color.secondary.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 7)
+                            )
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Voice Model",
+                        detail: voiceModelDetail,
+                        systemImage: "waveform.badge.sparkles",
+                        statusColor: .purple
+                    ) {
+                        Text(voiceModelName)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                SettingsGroup(
+                    title: "App Behavior",
+                    detail: "Fast access stays available when the window is closed."
+                ) {
+                    SettingRow(
+                        title: "Auto Mode",
+                        detail: "Suggest layouts locally and wait for approval",
+                        systemImage: "sparkles.rectangle.stack",
+                        statusColor: model.isAutoModeEnabled
+                            ? .purple
+                            : .secondary
+                    ) {
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { model.isAutoModeEnabled },
+                                set: { model.setAutoModeEnabled($0) }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Menu Bar",
+                        detail: "The PaneCue icon remains in the top bar",
+                        systemImage: "menubar.rectangle",
+                        statusColor: .blue
+                    ) {
+                        Label("Always On", systemImage: "checkmark.circle.fill")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.green)
+                    }
+                }
+
+                Button("Refresh Status") {
+                    model.refreshPermissions()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 34)
+            .padding(.vertical, 30)
+            .frame(maxWidth: 840, alignment: .leading)
+        }
+    }
+
+    private var processingModeIcon: String {
+        switch aiSettings.processingMode {
+        case .automatic:
+            return "arrow.triangle.branch"
+        case .offline:
+            return "lock.laptopcomputer"
+        case .cloud:
+            return "cloud"
+        }
+    }
+
+    private var processingModeColor: Color {
+        switch aiSettings.processingMode {
+        case .automatic:
+            return .purple
+        case .offline:
+            return .blue
+        case .cloud:
+            return .cyan
+        }
+    }
+
+    private var offlinePackColor: Color {
+        switch offlinePack.state {
+        case .ready:
+            return .green
+        case .downloading, .checking:
+            return .blue
+        case .notInstalled, .runtimeUnavailable, .failed:
+            return .orange
+        }
+    }
+
+    @ViewBuilder
+    private var offlinePackControl: some View {
+        switch offlinePack.state {
+        case .ready:
+            Label("Ready", systemImage: "checkmark.circle.fill")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.green)
+        case .checking:
+            ProgressView()
+                .controlSize(.small)
+        case .downloading:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Preparing…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .notInstalled:
+            Button("Prepare…") {
+                offlinePack.prepare()
+            }
+            .buttonStyle(.borderedProminent)
+        case .runtimeUnavailable:
+            Text("Unavailable")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.orange)
+        case .failed:
+            Button("Retry") {
+                offlinePack.prepare()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var voiceModelName: String {
+        switch aiSettings.processingMode {
+        case .automatic:
+            return "Automatic"
+        case .offline:
+            return aiSettings.localCommandModel.displayName
+        case .cloud:
+            return "gpt-realtime-2.1-mini"
+        }
+    }
+
+    private var voiceModelDetail: String {
+        switch aiSettings.processingMode {
+        case .automatic:
+            return "OpenAI online, local models when the network is unavailable"
+        case .offline:
+            return "No audio or command text leaves this Mac"
+        case .cloud:
+            return "Local models remain unloaded from memory"
+        }
+    }
+}
+
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 0) {
+                content
+            }
+            .padding(.horizontal, 16)
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: 16)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.primary.opacity(0.08))
+            }
+        }
+    }
+}
+
+private struct PermissionRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let isGranted: Bool
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        SettingRow(
+            title: title,
+            detail: detail,
+            systemImage: systemImage,
+            statusColor: isGranted ? .green : .orange
+        ) {
+            if isGranted {
+                Label("Allowed", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.green)
+            } else {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+private struct SettingRow<Trailing: View>: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let statusColor: Color
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 34, height: 34)
+                .background(statusColor.opacity(0.11), in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+            trailing
+        }
+        .padding(.vertical, 13)
+    }
+}

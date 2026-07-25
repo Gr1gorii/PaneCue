@@ -1,0 +1,26 @@
+model: Qwen/Qwen3-1.7B
+train: true
+fine_tune_type: lora
+optimizer: adamw
+data: training/hard-data
+seed: 84
+num_layers: 12
+batch_size: 1
+grad_accumulation_steps: 4
+iters: 50
+val_batches: 15
+learning_rate: 0.000005
+steps_per_report: 10
+steps_per_eval: 25
+resume_adapter_file: training/adapters/qwen3-1.7b-panecue/0000050_adapters.safetensors
+adapter_path: training/adapters/qwen3-1.7b-panecue-v2
+save_every: 25
+test: false
+test_batches: 30
+max_seq_length: 768
+grad_checkpoint: true
+mask_prompt: true
+lora_parameters:
+  rank: 16
+  dropout: 0.05
+  scale: 32.0

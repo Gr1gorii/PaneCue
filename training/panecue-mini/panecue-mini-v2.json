@@ -1,0 +1,83 @@
+{
+  "format": "PaneCueMini",
+  "version": 1,
+  "classes": [
+    "apply_code_and_call",
+    "apply_documentation_and_code",
+    "apply_notes_and_browser",
+    "arrange_dynamic_workspace",
+    "show_browser_video",
+    "restore_previous_layout",
+    "no_action"
+  ],
+  "dimension": 71424,
+  "confidence_threshold": 0.52,
+  "margin_threshold": 0.1,
+  "temperature": 1.0,
+  "size_bytes": 500056,
+  "quantization": "per-class int8",
+  "training_examples": 42000,
+  "learned_parameters": 499975,
+  "validation": {
+    "accuracy": 0.5921052631578947,
+    "correct": 45,
+    "total": 76,
+    "mean_confidence": 0.7488262692564412,
+    "mean_margin": 0.6174481069526672,
+    "per_action": {
+      "apply_code_and_call": {
+        "wrong": 10,
+        "correct": 4
+      },
+      "apply_documentation_and_code": {
+        "wrong": 5,
+        "correct": 8
+      },
+      "apply_notes_and_browser": {
+        "wrong": 8,
+        "correct": 4
+      },
+      "no_action": {
+        "correct": 11,
+        "wrong": 1
+      },
+      "restore_previous_layout": {
+        "correct": 9,
+        "wrong": 3
+      },
+      "show_browser_video": {
+        "correct": 9,
+        "wrong": 4
+      }
+    }
+  },
+  "test": {
+    "accuracy": 0.7378640776699029,
+    "correct": 76,
+    "total": 103,
+    "mean_confidence": 0.8425627426036353,
+    "mean_margin": 0.7472226046427096,
+    "per_action": {
+      "apply_code_and_call": {
+        "correct": 14,
+        "wrong": 3
+      },
+      "apply_documentation_and_code": {
+        "wrong": 19
+      },
+      "apply_notes_and_browser": {
+        "correct": 19
+      },
+      "no_action": {
+        "correct": 11,
+        "wrong": 5
+      },
+      "restore_previous_layout": {
+        "correct": 16
+      },
+      "show_browser_video": {
+        "correct": 16
+      }
+    }
+  }
+}

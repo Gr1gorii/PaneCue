@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>PaneCue</string>
+    <key>CFBundleExecutable</key>
+    <string>PaneCue</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.gr1gorii.PaneCue</string>
+    <key>CFBundleIconFile</key>
+    <string>PaneCue</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>PaneCue</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>13</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>PaneCue controls only the selected Chrome video tab to isolate its player, pause playback, and seek by 10 seconds.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>PaneCue records only while a voice command is active so it can select a window scenario.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>PaneCue can recognize voice commands entirely on this Mac when Offline Mode is enabled.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>PaneCue captures only the selected call window to show its video in a small floating panel.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
