@@ -20,6 +20,42 @@ struct WorkspacePlanTests {
     }
 
     @Test
+    func createsPreviewFromAnExplicitLayoutWithoutAnActionVerb() {
+        let plan = WorkspacePlanCommandInterpreter.initialPlan(
+            from: "Chrome слева, Заметки справа, Терминал маленький снизу"
+        )
+
+        #expect(plan?.windows.count == 3)
+        #expect(
+            plan?.windows.map(\.target.displayName)
+                == ["Chrome", "Any notes app", "Terminal"]
+        )
+    }
+
+    @Test
+    func preservesADeclaredTwoWindowLayoutWithoutAnActionVerb() throws {
+        let intent = try #require(
+            DynamicWorkspaceCommandParser.intent(
+                from: "Chrome большой слева, Заметки справа"
+            )
+        )
+
+        #expect(intent.action == .arrangeDynamicWorkspace)
+        #expect(
+            intent.arguments[DynamicWorkspaceArgument.primaryName]
+                == "Chrome"
+        )
+        #expect(
+            intent.arguments[DynamicWorkspaceArgument.primaryPosition]
+                == "leading"
+        )
+        #expect(
+            intent.arguments[DynamicWorkspaceArgument.primaryRatio]
+                == "0.75"
+        )
+    }
+
+    @Test
     func followUpResizesTheNamedWindow() throws {
         let initial = try #require(
             WorkspacePlanCommandInterpreter.initialPlan(

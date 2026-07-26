@@ -22,6 +22,7 @@ public enum DynamicWorkspaceCommandParser {
         var value: String
         var name: String
         var location: Int
+        var endLocation: Int
     }
 
     private struct Alias {
@@ -232,7 +233,10 @@ public enum DynamicWorkspaceCommandParser {
 
     public static func intent(from transcript: String) -> VoiceCommandIntent? {
         let text = normalize(transcript)
-        guard hasActionVerb(text), !isNegated(text) else {
+        guard (
+            hasActionVerb(text)
+                || hasExplicitLayoutRequest(in: transcript)
+        ), !isNegated(text) else {
             return nil
         }
 
@@ -278,6 +282,7 @@ public enum DynamicWorkspaceCommandParser {
         let largerLocation = markerLocation(
             in: text,
             markers: [
+                "больш",
                 "побольше",
                 "намного больше",
                 "главн",
@@ -362,6 +367,7 @@ public enum DynamicWorkspaceCommandParser {
                 "снизу",
                 "поменьше",
                 "побольше",
+                "больш",
                 "маленьк",
                 "компактн",
                 "узк",
@@ -416,7 +422,11 @@ public enum DynamicWorkspaceCommandParser {
                         kind: candidate.alias.kind,
                         value: candidate.alias.value,
                         name: candidate.alias.name,
-                        location: location
+                        location: location,
+                        endLocation: text.distance(
+                            from: text.startIndex,
+                            to: range.upperBound
+                        )
                     )
                 )
                 occupied.append(range)
@@ -441,9 +451,22 @@ public enum DynamicWorkspaceCommandParser {
         targets: [Target]
     ) -> Int {
         targets.indices.min {
-            abs(targets[$0].location - location)
-                < abs(targets[$1].location - location)
+            distance(from: location, to: targets[$0])
+                < distance(from: location, to: targets[$1])
         } ?? 0
+    }
+
+    private static func distance(
+        from location: Int,
+        to target: Target
+    ) -> Int {
+        if location < target.location {
+            return target.location - location
+        }
+        if location > target.endLocation {
+            return location - target.endLocation
+        }
+        return 0
     }
 
     private static func position(
@@ -479,11 +502,13 @@ public enum DynamicWorkspaceCommandParser {
                     from: text.startIndex,
                     to: range.lowerBound
                 )
-                let primaryDistance = abs(
-                    markerLocation - target.location
+                let primaryDistance = distance(
+                    from: markerLocation,
+                    to: target
                 )
-                let secondaryDistance = abs(
-                    markerLocation - secondary.location
+                let secondaryDistance = distance(
+                    from: markerLocation,
+                    to: secondary
                 )
                 return (
                     distance: min(
@@ -561,6 +586,7 @@ public enum DynamicWorkspaceCommandParser {
             text,
             [
                 "намного",
+                "больш",
                 "маленьк",
                 "компактн",
                 "на весь экран",

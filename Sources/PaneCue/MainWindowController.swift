@@ -53,34 +53,34 @@ struct PaneCueDashboardSnapshot {
 }
 
 struct PaneCueDashboardActions {
-    let runBuiltIn: (VoiceCommandAction) -> Void
-    let runCustom: (UUID) -> Void
-    let restore: () -> Void
-    let toggleVoice: () -> Void
-    let configureAPIKey: () -> Void
-    let requestAccessibility: () -> Void
-    let requestScreenRecordingAccess: () -> Void
-    let requestMicrophoneAccess: () -> Void
-    let requestSpeechRecognitionAccess: () -> Void
-    let openPrivacyPane: (PaneCuePrivacyPane) -> Void
-    let setAutoModeEnabled: (Bool) -> Void
-    let scenariosDidChange: () -> Void
-    let analyzeCommand:
+    let runBuiltIn: @MainActor (VoiceCommandAction) -> Void
+    let runCustom: @MainActor (UUID) -> Void
+    let restore: @MainActor () -> Void
+    let toggleVoice: @MainActor () -> Void
+    let configureAPIKey: @MainActor () -> Void
+    let requestAccessibility: @MainActor () -> Void
+    let requestScreenRecordingAccess: @MainActor () -> Void
+    let requestMicrophoneAccess: @MainActor () -> Void
+    let requestSpeechRecognitionAccess: @MainActor () -> Void
+    let openPrivacyPane: @MainActor (PaneCuePrivacyPane) -> Void
+    let setAutoModeEnabled: @MainActor (Bool) -> Void
+    let scenariosDidChange: @MainActor () -> Void
+    let analyzeCommand: @MainActor
         (String, WorkspacePlan?) async throws -> CommandLabAnalysis
-    let applyAnalyzedCommand:
+    let applyAnalyzedCommand: @MainActor
         (VoiceCommandIntent) async throws -> String
-    let applyWorkspacePlan:
+    let applyWorkspacePlan: @MainActor
         (WorkspacePlan) async throws -> WorkspaceApplyResult
-    let rollbackWorkspace: () async throws -> String
-    let saveCommandCorrection:
+    let rollbackWorkspace: @MainActor () async throws -> String
+    let saveCommandCorrection: @MainActor
         (String, VoiceCommandIntent?) -> Void
-    let savePlanCorrection:
+    let savePlanCorrection: @MainActor
         (String, WorkspacePlan) -> Void
     let startCommandLabListening: @MainActor () async throws -> Void
     let stopCommandLabListening: @MainActor () async throws -> String
-    let cancelCommandLabListening: () -> Void
-    let makeDiagnosticsReport: () -> String
-    let resetPersonalization: () -> Int
+    let cancelCommandLabListening: @MainActor () -> Void
+    let makeDiagnosticsReport: @MainActor () -> String
+    let resetPersonalization: @MainActor () -> Int
 }
 
 @MainActor

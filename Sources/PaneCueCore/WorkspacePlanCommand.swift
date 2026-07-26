@@ -27,7 +27,11 @@ public enum WorkspacePlanCommandInterpreter {
             return nil
         }
         let text = normalize(transcript)
-        guard hasActionVerb(text) else {
+        guard hasActionVerb(text)
+            || DynamicWorkspaceCommandParser.hasExplicitLayoutRequest(
+                in: transcript
+            )
+        else {
             return nil
         }
         let targets = DynamicWorkspaceCommandParser.mentionedTargets(

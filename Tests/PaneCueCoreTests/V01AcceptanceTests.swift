@@ -6,6 +6,23 @@ import Testing
 @Suite("v0.1 acceptance")
 struct V01AcceptanceTests {
     @Test
+    func frozenHeroCommandCreatesThreeWindowPreview() throws {
+        let plan = try #require(
+            WorkspacePlanCommandInterpreter.initialPlan(
+                from: "VS Code большой слева, Safari справа, Terminal маленький снизу"
+            )
+        )
+
+        #expect(plan.windows.count == 3)
+        #expect(plan.windows.map(\.target.displayName) == [
+            "VS Code",
+            "Safari",
+            "Terminal"
+        ])
+        #expect(plan.windows[0].gridRect.width > plan.windows[1].gridRect.width)
+    }
+
+    @Test
     func russianOfflineJourneyReachesReversibleApply() throws {
         let initial = try #require(
             WorkspacePlanCommandInterpreter.initialPlan(
