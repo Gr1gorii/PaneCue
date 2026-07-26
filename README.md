@@ -6,8 +6,8 @@ layouts, a visual scenario editor, local automation, floating call or browser
 video, and optional voice commands.
 
 > [!IMPORTANT]
-> PaneCue is an early macOS prototype. It is not yet notarized or distributed
-> as a production-ready download.
+> PaneCue v0.1.0 is locally qualified on macOS 26 Apple Silicon. It is not yet
+> notarized or distributed as a production-ready download.
 
 PaneCue source code is available under the
 [Mozilla Public License 2.0](LICENSE).
@@ -103,7 +103,9 @@ For this local prototype, the user supplies an OpenAI API key and PaneCue stores
 
 ## Requirements
 
-- macOS 14 or newer
+- Qualified configuration: macOS 26 on Apple Silicon
+- The project still builds with a macOS 14 deployment target, but macOS 14,
+  macOS 15, and Intel are not qualified or supported by v0.1
 - Swift 6
 - Accessibility permission for the packaged `PaneCue.app`
 - Microphone permission only for voice commands
