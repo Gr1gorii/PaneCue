@@ -131,6 +131,8 @@ Release engineering is documented in
 [the v0.1 release guide](docs/release/v0.1-release.md). A local DMG can be
 created with `./scripts/build_release_dmg.sh --adhoc`; public artifacts require
 a Developer ID Application certificate and successful Apple notarization.
+Apple Developer enrollment is intentionally deferred while v0.1 is qualified
+locally.
 
 To build the separate experimental app:
 
