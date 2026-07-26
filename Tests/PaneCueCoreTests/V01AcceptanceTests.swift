@@ -23,6 +23,29 @@ struct V01AcceptanceTests {
     }
 
     @Test
+    func browserNotesAndSmallTerminalKeepTheFrozenGeometry() throws {
+        let plan = try #require(
+            WorkspacePlanCommandInterpreter.initialPlan(
+                from: "Chrome большой слева, Заметки справа сверху, Терминал маленький справа снизу"
+            )
+        )
+
+        #expect(plan.windows.map(\.target.displayName) == [
+            "Chrome",
+            "Any notes app",
+            "Terminal"
+        ])
+        #expect(abs(plan.windows[0].gridRect.width - 2.0 / 3.0) < 0.000_001)
+        #expect(plan.windows[0].gridRect.height == 1)
+        #expect(abs(plan.windows[1].gridRect.x - 2.0 / 3.0) < 0.000_001)
+        #expect(plan.windows[1].gridRect.y == 0)
+        #expect(plan.windows[1].gridRect.height == 0.5)
+        #expect(abs(plan.windows[2].gridRect.x - 2.0 / 3.0) < 0.000_001)
+        #expect(plan.windows[2].gridRect.y == 0.5)
+        #expect(plan.windows[2].gridRect.height == 0.5)
+    }
+
+    @Test
     func russianOfflineJourneyReachesReversibleApply() throws {
         let initial = try #require(
             WorkspacePlanCommandInterpreter.initialPlan(
