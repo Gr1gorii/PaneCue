@@ -102,6 +102,52 @@ struct LayoutPlannerTests {
 
         #expect(converted == CGRect(x: 0, y: 25, width: 1280, height: 782))
     }
+
+    @Test
+    func firstWindowFrameIsCenteredInsidePrimaryVisibleFrame() {
+        let visibleFrame = CGRect(
+            x: 0,
+            y: 39,
+            width: 1710,
+            height: 1073
+        )
+
+        #expect(
+            ScreenGeometry.centeredFrame(
+                windowSize: CGSize(width: 1020, height: 680),
+                in: visibleFrame
+            ) == CGRect(x: 345, y: 235.5, width: 1020, height: 680)
+        )
+        #expect(
+            ScreenGeometry.centeredFrame(
+                windowSize: CGSize(width: 2000, height: 1200),
+                in: visibleFrame
+            ) == visibleFrame
+        )
+    }
+
+    @Test
+    func restoredWindowFrameIsContainedByOneVisibleFrame() {
+        let visibleFrame = CGRect(
+            x: 0,
+            y: 39,
+            width: 1710,
+            height: 1073
+        )
+
+        #expect(
+            ScreenGeometry.containedFrame(
+                CGRect(x: 854, y: 575, width: 860, height: 622),
+                in: visibleFrame
+            ) == CGRect(x: 850, y: 490, width: 860, height: 622)
+        )
+        #expect(
+            ScreenGeometry.overlapArea(
+                CGRect(x: 854, y: 575, width: 860, height: 622),
+                visibleFrame
+            ) == 459_672
+        )
+    }
 }
 
 @Suite("Application role classifier")

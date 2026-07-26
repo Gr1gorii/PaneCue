@@ -372,6 +372,9 @@ final class MainWindowController {
     let model: PaneCueDashboardModel
 
     private let windowController: NSWindowController
+    private var restoredSavedFrame = false
+    private var scheduledInitialFrameValidation = false
+    private var validatedInitialFrame = false
 
     init(
         store: CustomScenarioStore,
@@ -415,10 +418,14 @@ final class MainWindowController {
         window.toolbarStyle = .unified
         window.contentViewController = hostingController
         window.minSize = NSSize(width: 860, height: 570)
-        window.center()
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.setFrameAutosaveName("PaneCue.MainWindow")
+
+        let frameAutosaveName = "PaneCue.MainWindow"
+        restoredSavedFrame = window.setFrameUsingName(
+            frameAutosaveName
+        )
+        window.setFrameAutosaveName(frameAutosaveName)
 
         windowController = NSWindowController(window: window)
     }
@@ -435,7 +442,10 @@ final class MainWindowController {
 
         NSApp.activate(ignoringOtherApps: true)
         windowController.showWindow(nil)
-        windowController.window?.makeKeyAndOrderFront(nil)
+        if let window = windowController.window {
+            window.makeKeyAndOrderFront(nil)
+            scheduleInitialFrameValidation(of: window)
+        }
     }
 
     func update(_ snapshot: PaneCueDashboardSnapshot) {
@@ -444,6 +454,55 @@ final class MainWindowController {
 
     func refreshPermissions() {
         model.refreshPermissions()
+    }
+
+    private func scheduleInitialFrameValidation(of window: NSWindow) {
+        guard !scheduledInitialFrameValidation,
+              !validatedInitialFrame else {
+            return
+        }
+        scheduledInitialFrameValidation = true
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self,
+                  let window else {
+                return
+            }
+            self.validateInitialFrame(of: window)
+        }
+    }
+
+    private func validateInitialFrame(of window: NSWindow) {
+        guard !validatedInitialFrame,
+              let primaryScreen = NSScreen.screens.first else {
+            return
+        }
+        validatedInitialFrame = true
+
+        if restoredSavedFrame {
+            let targetScreen = NSScreen.screens.max {
+                ScreenGeometry.overlapArea($0.visibleFrame, window.frame)
+                    < ScreenGeometry.overlapArea($1.visibleFrame, window.frame)
+            }
+            if let targetScreen,
+               ScreenGeometry.overlapArea(targetScreen.visibleFrame, window.frame) > 0 {
+                window.setFrame(
+                    ScreenGeometry.containedFrame(
+                        window.frame,
+                        in: targetScreen.visibleFrame
+                    ),
+                    display: false
+                )
+                return
+            }
+        }
+
+        window.setFrame(
+            ScreenGeometry.centeredFrame(
+                windowSize: window.frame.size,
+                in: primaryScreen.visibleFrame
+            ),
+            display: false
+        )
     }
 }
 
