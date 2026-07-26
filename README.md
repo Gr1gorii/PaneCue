@@ -20,6 +20,7 @@ The public-beta product contract is defined by:
 - [Included, experimental, and deferred scope](docs/product-freeze/v0.1/v0.1-scope.md)
 - [Primary user flow and failure behavior](docs/product-freeze/v0.1/v0.1-user-flow.md)
 - [Platform and application support matrix](docs/product-freeze/v0.1/v0.1-support-matrix.md)
+- [Automated acceptance gate and macOS smoke cases](docs/product-freeze/v0.1/v0.1-acceptance.md)
 - [Release, privacy, interface, and success decisions](docs/product-freeze/v0.1/v0.1-decisions.md)
 
 The repository now packages two explicit profiles from the same codebase:
@@ -118,6 +119,12 @@ Full Xcode is not required for the current Swift Package prototype.
 swift test
 ./scripts/package_app.sh
 open build/PaneCue.app
+```
+
+Before publishing a v0.1 candidate, run the complete automated gate:
+
+```sh
+./scripts/run_v01_acceptance.sh
 ```
 
 To build the separate experimental app:

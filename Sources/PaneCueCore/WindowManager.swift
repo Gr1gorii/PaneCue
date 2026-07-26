@@ -246,24 +246,6 @@ public final class WindowManager {
         }
 
         let windows = try eligibleWindows()
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?
-            .processIdentifier
-
-        if scenario.conditions.requiresExternalDisplay,
-           !ScreenGeometry.hasExternalDisplay {
-            return blockedApplyResult(
-                for: scenario,
-                reason: "The required external display is not connected."
-            )
-        }
-
-        if scenario.conditions.onlyDuringCall,
-           !windows.contains(where: { role(of: $0) == .meeting }) {
-            return blockedApplyResult(
-                for: scenario,
-                reason: "No active call window was found."
-            )
-        }
 
         guard let mainFrame = ScreenGeometry
             .visibleFrameInAccessibilityCoordinates(for: .main) else {
@@ -274,106 +256,141 @@ public final class WindowManager {
 
         var resolved: [ResolvedWindowSelection] = []
         var outcomesBySlot: [UUID: WorkspaceApplyOutcome] = [:]
+        let inventoryPairs = windows.enumerated().map { index, window in
+            let identifier = "candidate-\(index)"
+            return (
+                item: WorkspaceWindowInventoryItem(
+                    id: identifier,
+                    bundleIdentifier: window.bundleIdentifier,
+                    applicationName: window.applicationName,
+                    role: role(of: window),
+                    isMinimized: window.isMinimized,
+                    isFullScreen: window.isFullScreen,
+                    canSetFrame: AXHelpers.canSetFrame(on: window.element)
+                ),
+                window: window
+            )
+        }
+        let windowsByCandidateID = Dictionary(
+            uniqueKeysWithValues: inventoryPairs.map {
+                ($0.item.id, $0.window)
+            }
+        )
+        let decisions = WorkspaceApplyPreflight.evaluate(
+            scenario: scenario,
+            inventory: inventoryPairs.map(\.item),
+            hasExternalDisplay: ScreenGeometry.hasExternalDisplay,
+            hasActiveCall: windows.contains {
+                role(of: $0) == .meeting
+            }
+        )
 
         // Resolve from a fresh AX inventory at Apply time. The preview names
         // targets, while this pass verifies that each target still maps to one
         // unambiguous, movable window before any mutation begins.
-        for slot in scenario.windows {
-            let screenFrame: CGRect
-            switch slot.display {
-            case .main:
-                screenFrame = mainFrame
-            case .external:
-                guard let externalFrame else {
+        for decision in decisions {
+            guard let slot = scenario.windows.first(where: {
+                $0.id == decision.id
+            }) else {
+                continue
+            }
+
+            switch decision.status {
+            case let .ready(candidateID):
+                guard let window = windowsByCandidateID[candidateID] else {
                     outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                         id: slot.id,
                         targetName: slot.target.displayName,
-                        status: .skipped,
-                        reason: "The external display is no longer connected."
+                        status: .failed,
+                        reason: "The selected window is no longer available."
                     )
                     continue
                 }
-                screenFrame = externalFrame
-            }
+                let screenFrame = slot.display == .external
+                    ? (externalFrame ?? mainFrame)
+                    : mainFrame
+                let targetFrame = LayoutPlanner.frame(
+                    for: slot.gridRect,
+                    in: screenFrame
+                )
 
-            let candidates = windows.filter { window in
-                target(slot.target, matches: window)
-                    && !resolved.contains(where: {
-                        sameWindow($0.window, window)
-                    })
-            }
+                if framesApproximatelyEqual(window.frame, targetFrame) {
+                    outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                        id: slot.id,
+                        targetName: slot.target.displayName,
+                        applicationName: window.applicationName,
+                        status: .unchanged,
+                        reason: "Already in the previewed position.",
+                        matchesPreview: true
+                    )
+                } else {
+                    resolved.append(
+                        ResolvedWindowSelection(
+                            slot: slot,
+                            window: window,
+                            targetFrame: targetFrame
+                        )
+                    )
+                }
 
-            guard !candidates.isEmpty else {
+            case .missing:
                 outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                     id: slot.id,
                     targetName: slot.target.displayName,
                     status: .skipped,
                     reason: "The matching window was closed or is no longer available."
                 )
-                continue
-            }
 
-            guard candidates.count == 1 else {
+            case let .ambiguous(candidateCount):
                 outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                     id: slot.id,
                     targetName: slot.target.displayName,
                     status: .skipped,
-                    reason: "Multiple matching windows are open. Narrow the Cue and preview it again."
+                    reason: "\(candidateCount) matching windows are open. Narrow the Cue and preview it again."
                 )
-                continue
-            }
 
-            guard let window = preferredWindow(
-                among: candidates,
-                frontmostPID: frontmostPID
-            ) else {
-                continue
-            }
-            let targetFrame = LayoutPlanner.frame(
-                for: slot.gridRect,
-                in: screenFrame
-            )
-
-            if window.isFullScreen {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
+            case let .fullScreen(candidateID):
+                outcomesBySlot[slot.id] = blockedWindowOutcome(
+                    slot: slot,
+                    window: windowsByCandidateID[candidateID],
                     status: .skipped,
                     reason: "The window entered full screen after the preview. Exit full screen and apply again."
                 )
-            } else if window.isMinimized {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
+
+            case let .minimized(candidateID):
+                outcomesBySlot[slot.id] = blockedWindowOutcome(
+                    slot: slot,
+                    window: windowsByCandidateID[candidateID],
                     status: .skipped,
                     reason: "The window is minimized. Restore it and apply again."
                 )
-            } else if !AXHelpers.canSetFrame(on: window.element) {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
+
+            case let .unchangeable(candidateID):
+                outcomesBySlot[slot.id] = blockedWindowOutcome(
+                    slot: slot,
+                    window: windowsByCandidateID[candidateID],
                     status: .unchanged,
                     reason: "This window does not allow its size or position to be changed."
                 )
-            } else if framesApproximatelyEqual(window.frame, targetFrame) {
+
+            case .externalDisplayUnavailable:
                 outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                     id: slot.id,
                     targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
-                    status: .unchanged,
-                    reason: "Already in the previewed position.",
-                    matchesPreview: true
+                    status: .skipped,
+                    reason: "The external display is no longer connected."
                 )
-            } else {
-                resolved.append(
-                    ResolvedWindowSelection(
-                        slot: slot,
-                        window: window,
-                        targetFrame: targetFrame
-                    )
+
+            case .conditionNotMet:
+                let reason = scenario.conditions.requiresExternalDisplay
+                    && !ScreenGeometry.hasExternalDisplay
+                    ? "The required external display is not connected."
+                    : "No active call window was found."
+                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                    id: slot.id,
+                    targetName: slot.target.displayName,
+                    status: .skipped,
+                    reason: reason
                 )
             }
         }
@@ -643,38 +660,18 @@ public final class WindowManager {
         )
     }
 
-    private func target(
-        _ target: ScenarioWindowTarget,
-        matches window: ManagedWindow
-    ) -> Bool {
-        switch target.kind {
-        case .application:
-            guard let identifier = target.application?.bundleIdentifier else {
-                return false
-            }
-            return window.bundleIdentifier?.caseInsensitiveCompare(
-                identifier
-            ) == .orderedSame
-        case .role:
-            return role(of: window) == (target.role ?? .other)
-        }
-    }
-
-    private func blockedApplyResult(
-        for scenario: CustomScenario,
+    private func blockedWindowOutcome(
+        slot: ScenarioWindowSlot,
+        window: ManagedWindow?,
+        status: WorkspaceApplyOutcomeStatus,
         reason: String
-    ) -> WorkspaceApplyResult {
-        WorkspaceApplyResult(
-            scenarioName: scenario.name,
-            outcomes: scenario.windows.map { slot in
-                WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    status: .skipped,
-                    reason: reason
-                )
-            },
-            canRollback: false
+    ) -> WorkspaceApplyOutcome {
+        WorkspaceApplyOutcome(
+            id: slot.id,
+            targetName: slot.target.displayName,
+            applicationName: window?.applicationName,
+            status: status,
+            reason: reason
         )
     }
 
@@ -687,14 +684,6 @@ public final class WindowManager {
             && abs(first.minY - second.minY) <= tolerance
             && abs(first.width - second.width) <= tolerance
             && abs(first.height - second.height) <= tolerance
-    }
-
-    private func sameWindow(
-        _ first: ManagedWindow,
-        _ second: ManagedWindow
-    ) -> Bool {
-        first.processIdentifier == second.processIdentifier
-            && CFEqual(first.element, second.element)
     }
 
     private func preferredWindow(
