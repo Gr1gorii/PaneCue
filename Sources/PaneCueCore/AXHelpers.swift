@@ -119,17 +119,9 @@ enum AXHelpers {
             throw PaneCueWindowError.operationFailed(details: "Could not encode the target window position.")
         }
 
-        let sizeError = AXUIElementSetAttributeValue(
-            element,
-            kAXSizeAttribute as CFString,
-            sizeValue
-        )
-        guard sizeError == .success else {
-            throw PaneCueWindowError.operationFailed(
-                details: "The target application rejected the requested window size (\(sizeError.rawValue))."
-            )
-        }
-
+        // Move first so applications do not clamp the requested size against
+        // the window's old screen edge. Notes otherwise preserves its old
+        // frame when a wider secondary column would briefly cross the display.
         let positionError = AXUIElementSetAttributeValue(
             element,
             kAXPositionAttribute as CFString,
@@ -141,12 +133,31 @@ enum AXHelpers {
             )
         }
 
-        // Some apps constrain size after the first move. Reapply once, without looping.
+        let sizeError = AXUIElementSetAttributeValue(
+            element,
+            kAXSizeAttribute as CFString,
+            sizeValue
+        )
+        guard sizeError == .success else {
+            throw PaneCueWindowError.operationFailed(
+                details: "The target application rejected the requested window size (\(sizeError.rawValue))."
+            )
+        }
+
+        // Some apps reconcile their constraints after the first change.
+        // Reapply once in the same edge-safe order, without looping.
+        _ = AXUIElementSetAttributeValue(
+            element,
+            kAXPositionAttribute as CFString,
+            positionValue
+        )
         _ = AXUIElementSetAttributeValue(
             element,
             kAXSizeAttribute as CFString,
             sizeValue
         )
+        // A managed or previously filled window can accept the size while
+        // snapping back to its old edge. Make position the final authority.
         _ = AXUIElementSetAttributeValue(
             element,
             kAXPositionAttribute as CFString,

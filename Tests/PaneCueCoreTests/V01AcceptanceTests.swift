@@ -35,16 +35,36 @@ struct V01AcceptanceTests {
             "Any notes app",
             "Terminal"
         ])
-        #expect(abs(plan.windows[0].gridRect.width - 2.0 / 3.0) < 0.000_001)
+        #expect(abs(plan.windows[0].gridRect.width - 0.56) < 0.000_001)
         #expect(plan.windows[0].gridRect.height == 1)
-        #expect(abs(plan.windows[1].gridRect.x - 2.0 / 3.0) < 0.000_001)
+        #expect(abs(plan.windows[1].gridRect.x - 0.56) < 0.000_001)
         #expect(plan.windows[1].gridRect.y == 0)
-        #expect(abs(plan.windows[1].gridRect.width - 1.0 / 3.0) < 0.000_001)
-        #expect(plan.windows[1].gridRect.height == 0.75)
-        #expect(abs(plan.windows[2].gridRect.x - 2.0 / 3.0) < 0.000_001)
-        #expect(plan.windows[2].gridRect.y == 0.75)
-        #expect(abs(plan.windows[2].gridRect.width - 1.0 / 3.0) < 0.000_001)
-        #expect(plan.windows[2].gridRect.height == 0.25)
+        #expect(abs(plan.windows[1].gridRect.width - 0.44) < 0.000_001)
+        #expect(plan.windows[1].gridRect.height == 0.8)
+        #expect(abs(plan.windows[2].gridRect.x - 0.56) < 0.000_001)
+        #expect(plan.windows[2].gridRect.y == 0.8)
+        #expect(abs(plan.windows[2].gridRect.width - 0.44) < 0.000_001)
+        #expect(plan.windows[2].gridRect.height == 0.2)
+    }
+
+    @Test
+    func naturalBrowserNotesAndSmallTerminalKeepsTerminalCompact() throws {
+        let plan = try #require(
+            WorkspacePlanCommandInterpreter.initialPlan(
+                from: "Открой большой браузер, заметки и маленький терминал"
+            )
+        )
+
+        #expect(plan.windows.map(\.target.displayName) == [
+            "Any browser",
+            "Any notes app",
+            "Terminal"
+        ])
+        #expect(abs(plan.windows[0].gridRect.width - 0.56) < 0.000_001)
+        #expect(abs(plan.windows[1].gridRect.width - 0.44) < 0.000_001)
+        #expect(plan.windows[1].gridRect.height == 0.8)
+        #expect(plan.windows[2].gridRect.y == 0.8)
+        #expect(plan.windows[2].gridRect.height == 0.2)
     }
 
     @Test

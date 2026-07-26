@@ -71,16 +71,23 @@ public enum WorkspacePlanCommandInterpreter {
             targets[supportingIndex],
             targets[hints.compactIndex]
         ]
-        // Keep the secondary column wide enough for the macOS Notes window.
-        // A 75/25 split looks plausible in Preview but Notes constrains it on
-        // real hardware, so a three-window layout caps the dominant column at
-        // two thirds and expresses "small" through the vertical split.
+        // Keep the secondary column wide enough for its real application.
+        // macOS Notes needs about 43% of the built-in display at its default
+        // sidebar width; narrower previews look plausible but are constrained
+        // during Apply. Other supporting apps keep the denser 67/33 split.
+        let supportsNotes =
+            targets[supportingIndex].role == .notes
+            || targets[supportingIndex].application?.bundleIdentifier
+                == "com.apple.Notes"
+        let maximumDominantRatio = supportsNotes
+            ? 0.56
+            : 2.0 / 3.0
         let dominantRatio = min(
             max(hints.dominantRatio, 0.6),
-            2.0 / 3.0
+            maximumDominantRatio
         )
         let secondaryWidth = 1 - dominantRatio
-        let compactHeight = 0.25
+        let compactHeight = supportsNotes ? 0.20 : 0.25
         let supportingHeight = 1 - compactHeight
         let dominantX = hints.dominantLeads ? 0.0 : secondaryWidth
         let secondaryX = hints.dominantLeads ? dominantRatio : 0.0

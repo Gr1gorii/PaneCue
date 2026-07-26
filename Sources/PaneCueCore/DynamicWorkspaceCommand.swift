@@ -38,6 +38,11 @@ public enum DynamicWorkspaceCommandParser {
         var endLocation: Int
     }
 
+    private struct MarkerSpan {
+        var location: Int
+        var endLocation: Int
+    }
+
     private struct Alias {
         var phrases: [String]
         var kind: String
@@ -253,7 +258,7 @@ public enum DynamicWorkspaceCommandParser {
             return nil
         }
 
-        let smallerLocation = markerLocation(
+        let smallerMarker = markerSpan(
             in: text,
             markers: [
                 "чуть поменьше",
@@ -272,7 +277,7 @@ public enum DynamicWorkspaceCommandParser {
                 "narrow"
             ]
         )
-        let largerLocation = markerLocation(
+        let largerMarker = markerSpan(
             in: text,
             markers: [
                 "больш",
@@ -292,14 +297,14 @@ public enum DynamicWorkspaceCommandParser {
                 "full screen"
             ]
         )
-        guard smallerLocation != nil || largerLocation != nil else {
+        guard smallerMarker != nil || largerMarker != nil else {
             return nil
         }
 
-        let compactIndex = smallerLocation.map {
+        let compactIndex = smallerMarker.map {
             nearestTarget(to: $0, targets: targets)
         } ?? 2
-        let dominantIndex = largerLocation.map {
+        let dominantIndex = largerMarker.map {
             nearestTarget(to: $0, targets: targets)
         } ?? targets.indices.first(where: { $0 != compactIndex }) ?? 0
         guard compactIndex != dominantIndex else {
@@ -586,6 +591,26 @@ public enum DynamicWorkspaceCommandParser {
         } ?? 0
     }
 
+    private static func nearestTarget(
+        to marker: MarkerSpan,
+        targets: [Target]
+    ) -> Int {
+        targets.indices.min { lhs, rhs in
+            let lhsDistance = distance(from: marker, to: targets[lhs])
+            let rhsDistance = distance(from: marker, to: targets[rhs])
+            if lhsDistance != rhsDistance {
+                return lhsDistance < rhsDistance
+            }
+
+            let lhsFollows = targets[lhs].location >= marker.endLocation
+            let rhsFollows = targets[rhs].location >= marker.endLocation
+            if lhsFollows != rhsFollows {
+                return lhsFollows
+            }
+            return targets[lhs].location < targets[rhs].location
+        } ?? 0
+    }
+
     private static func distance(
         from location: Int,
         to target: Target
@@ -595,6 +620,19 @@ public enum DynamicWorkspaceCommandParser {
         }
         if location > target.endLocation {
             return location - target.endLocation
+        }
+        return 0
+    }
+
+    private static func distance(
+        from marker: MarkerSpan,
+        to target: Target
+    ) -> Int {
+        if marker.endLocation <= target.location {
+            return target.location - marker.endLocation
+        }
+        if marker.location >= target.endLocation {
+            return marker.location - target.endLocation
         }
         return 0
     }
@@ -668,6 +706,26 @@ public enum DynamicWorkspaceCommandParser {
                 text.distance(from: text.startIndex, to: $0.lowerBound)
             }
         }.min()
+    }
+
+    private static func markerSpan(
+        in text: String,
+        markers: [String]
+    ) -> MarkerSpan? {
+        markers.compactMap { marker in
+            text.range(of: marker).map { range in
+                MarkerSpan(
+                    location: text.distance(
+                        from: text.startIndex,
+                        to: range.lowerBound
+                    ),
+                    endLocation: text.distance(
+                        from: text.startIndex,
+                        to: range.upperBound
+                    )
+                )
+            }
+        }.min { $0.location < $1.location }
     }
 
     private static func hasActionVerb(_ text: String) -> Bool {
