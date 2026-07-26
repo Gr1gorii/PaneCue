@@ -102,6 +102,7 @@ final class PaneCueDashboardModel: ObservableObject {
     @Published private(set) var isAutoModeEnabled = false
     @Published private(set) var hasCompletedTextOnboarding = false
     @Published private(set) var editorRevision = 0
+    @Published private(set) var arrangementRevision = 0
     @Published var isOnboardingPresented: Bool
 
     let applications: [InstalledApplication]
@@ -193,6 +194,11 @@ final class PaneCueDashboardModel: ObservableObject {
     func openScenarios() {
         editorRevision += 1
         selectedSection = .cues
+    }
+
+    func startNewArrangement() {
+        arrangementRevision += 1
+        selectedSection = .arrange
     }
 
     func saveScenarios(_ updatedScenarios: [CustomScenario]) {
@@ -677,7 +683,7 @@ private struct PaneCueDashboardView: View {
                         .frame(maxWidth: .infinity)
                 } else {
                     Button {
-                        model.selectedSection = .arrange
+                        model.startNewArrangement()
                     } label: {
                         Label("New Arrangement", systemImage: "plus")
                             .frame(maxWidth: .infinity)
@@ -695,6 +701,7 @@ private struct PaneCueDashboardView: View {
         switch model.selectedSection {
         case .arrange:
             CommandLabView(model: model)
+                .id(model.arrangementRevision)
         case .cues:
             ScenarioEditorView(
                 initialScenarios: model.scenarios,
