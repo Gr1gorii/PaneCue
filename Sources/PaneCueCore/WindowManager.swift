@@ -120,9 +120,7 @@ public final class WindowManager {
             activeSnapshot = snapshot
             activeScenarioName = "Code + Call"
 
-            logger.info(
-                "Applied Code + Call to \(ide.applicationName, privacy: .public) and \(meeting.applicationName, privacy: .public)"
-            )
+            logger.info("Applied the Code + Call layout")
 
             return "Code + Call · \(ide.applicationName) + \(meeting.applicationName)"
         } catch {
@@ -567,9 +565,7 @@ public final class WindowManager {
             outcomes: orderedOutcomes,
             canRollback: didAttemptMutation
         )
-        logger.info(
-            "Apply completed: \(result.movedCount, privacy: .public) moved, \(result.unchangedCount, privacy: .public) unchanged, \(result.skippedCount, privacy: .public) skipped, \(result.failedCount, privacy: .public) failed"
-        )
+        logger.info("Completed a workspace Apply transaction")
         return result
     }
 
@@ -783,9 +779,7 @@ public final class WindowManager {
 
             activeSnapshot = snapshot
             activeScenarioName = scenarioName
-            logger.info(
-                "Applied \(scenarioName, privacy: .public) to \(primary.applicationName, privacy: .public) and \(secondary.applicationName, privacy: .public)"
-            )
+            logger.info("Applied a two-window layout")
             return summary
         } catch {
             restore(snapshot, clearingOnCompletion: false)
@@ -802,9 +796,7 @@ public final class WindowManager {
         activeScenarioName = nil
 
         if !failures.isEmpty {
-            logger.warning(
-                "Discarded a stale scenario snapshot after \(failures.count, privacy: .public) restoration failure(s)"
-            )
+            logger.warning("Discarded a stale layout snapshot")
         }
     }
 
@@ -887,9 +879,7 @@ public final class WindowManager {
                 AXHelpers.setMinimized(window.isMinimized, on: window.element)
             } catch {
                 failures.append(error)
-                logger.error(
-                    "Could not restore \(window.applicationName, privacy: .public): \(error.localizedDescription, privacy: .public)"
-                )
+                logger.error("Could not restore a window from the layout snapshot")
             }
         }
 

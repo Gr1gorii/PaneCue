@@ -294,9 +294,7 @@ final class CallVideoPreviewController: NSObject {
             )
         }
 
-        logger.info(
-            "Started \(source.sourceDescription, privacy: .public) capture for window \(sourceWindow.windowID, privacy: .public)"
-        )
+        logger.info("Started a floating video capture")
         let applicationName = sourceWindow.owningApplication?.applicationName
             ?? "application"
         return "\(source.sourceDescription.capitalized) is floating · \(applicationName)"
@@ -310,9 +308,7 @@ final class CallVideoPreviewController: NSObject {
             do {
                 try await stream.stopCapture()
             } catch {
-                logger.error(
-                    "Could not stop capture cleanly: \(error.localizedDescription, privacy: .public)"
-                )
+                logger.error("Could not stop floating video capture cleanly")
             }
         }
 
@@ -534,9 +530,7 @@ final class CallVideoPreviewController: NSObject {
             previewView.setPlaybackPaused(paused)
         } catch {
             NSSound.beep()
-            logger.error(
-                "Could not toggle browser video playback: \(error.localizedDescription, privacy: .public)"
-            )
+            logger.error("Could not toggle browser video playback")
         }
     }
 
@@ -545,9 +539,7 @@ final class CallVideoPreviewController: NSObject {
             try chromeVideoSession.seek(by: seconds)
         } catch {
             NSSound.beep()
-            logger.error(
-                "Could not seek browser video: \(error.localizedDescription, privacy: .public)"
-            )
+            logger.error("Could not seek browser video")
         }
     }
 }
@@ -579,14 +571,11 @@ extension CallVideoPreviewController: SCStreamDelegate {
         _ stream: SCStream,
         didStopWithError error: any Error
     ) {
-        let details = error.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
-            logger.error(
-                "Floating video capture stopped: \(details, privacy: .public)"
-            )
+            logger.error("Floating video capture stopped unexpectedly")
             previewView.showStatus("Video capture stopped")
             self.stream = nil
             isCapturing = false

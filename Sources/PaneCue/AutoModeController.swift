@@ -194,9 +194,7 @@ final class AutoModeController: NSObject {
         do {
             windows = try windowManager.eligibleWindows()
         } catch {
-            logger.error(
-                "Could not inspect windows: \(error.localizedDescription, privacy: .public)"
-            )
+            logger.error("Could not inspect the window inventory")
             return
         }
 
@@ -251,9 +249,7 @@ final class AutoModeController: NSObject {
         guard let suggestion = AutoModeSuggestionEngine.suggestion(
             for: context
         ) else {
-            logger.debug(
-                "No suggestion for \(windowContexts.count, privacy: .public) eligible windows; active role: \(String(describing: currentRole), privacy: .public)"
-            )
+            logger.debug("No suggestion for the current workspace")
             return
         }
 
@@ -261,15 +257,11 @@ final class AutoModeController: NSObject {
             cooldownUntilByScenario[suggestion.scenario]
                 ?? Date.distantPast
         guard Date() >= cooldownUntil else {
-            logger.debug(
-                "Skipping \(suggestion.scenario.title, privacy: .public) during its cooldown"
-            )
+            logger.debug("Skipping a suggestion during its cooldown")
             return
         }
 
-        logger.info(
-            "Suggesting \(suggestion.scenario.title, privacy: .public)"
-        )
+        logger.info("Prepared a workspace suggestion")
         cooldownUntilByScenario[suggestion.scenario] =
             Date().addingTimeInterval(2 * 60)
         suggestionHandler(suggestion)
