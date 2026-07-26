@@ -10,7 +10,7 @@ enum CommandLabError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable:
-            return "Command Lab is temporarily unavailable."
+            return "Arrange is temporarily unavailable."
         case .microphonePermissionRequired:
             return "Enable PaneCue in System Settings → Privacy & Security → Microphone."
         case .recordingTooShort:
@@ -34,6 +34,10 @@ final class CommandLabService {
     private let corrections = CommandLabCorrectionStore()
 
     private(set) var isListening = false
+
+    var correctionCount: Int {
+        corrections.count
+    }
 
     func analyze(
         transcript: String,
@@ -188,6 +192,11 @@ final class CommandLabService {
         isListening = false
     }
 
+    @discardableResult
+    func resetPersonalization() -> Int {
+        corrections.clear()
+    }
+
     private func requestMicrophoneAccessIfNeeded() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -270,6 +279,10 @@ private final class CommandLabCorrectionStore {
     private let defaults: UserDefaults
     private let key = "PaneCue.CommandLabCorrections.v1"
     private var corrections: [StoredCorrection]
+
+    var count: Int {
+        corrections.count
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -365,6 +378,14 @@ private final class CommandLabCorrectionStore {
         if let data = try? JSONEncoder().encode(corrections) {
             defaults.set(data, forKey: self.key)
         }
+    }
+
+    @discardableResult
+    func clear() -> Int {
+        let removedCount = corrections.count
+        corrections.removeAll()
+        defaults.removeObject(forKey: key)
+        return removedCount
     }
 
     private func normalize(_ value: String) -> String {

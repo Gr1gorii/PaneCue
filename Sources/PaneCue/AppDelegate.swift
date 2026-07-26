@@ -122,21 +122,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             applyWorkspacePlan: { [weak self] plan in
                 guard let self,
                       let scenario = plan.scenario(
-                          named: "Command Lab"
+                          named: "Arrange"
                       ) else {
                     throw PaneCueWindowError.operationFailed(
                         details: "Add at least two windows before applying this plan."
                     )
                 }
+                try ensureAccessibilityForApply()
                 beginUserInitiatedScenario()
                 await callVideoPreview.stopCapture()
                 try await applicationLauncher.ensureApplications(
                     for: scenario
                 )
-                let summary = try windowManager.applyCustomLayout(
+                let result = try windowManager.applyCustomLayoutDetailed(
                     scenario
                 )
+                updateMenuState(message: result.summary)
+                return result
+            },
+            rollbackWorkspace: { [weak self] in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                let summary = try await restoreWorkspace()
                 updateMenuState(message: summary)
+                autoMode.workspaceMayHaveChanged()
                 return summary
             },
             saveCommandCorrection: {
@@ -170,6 +180,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             cancelCommandLabListening: { [weak self] in
                 self?.commandLab.cancelListening()
+            },
+            makeDiagnosticsReport: { [weak self] in
+                guard let self else {
+                    return "{\n  \"error\" : \"PaneCue is unavailable\"\n}"
+                }
+                return PaneCueDiagnostics.report(
+                    scenarios: customScenarioStore.scenarios,
+                    correctionCount: commandLab.correctionCount
+                )
+            },
+            resetPersonalization: { [weak self] in
+                guard let self else {
+                    return 0
+                }
+                let removedCount = commandLab.resetPersonalization()
+                if PaneCueReleaseProfile.current.isExperimental {
+                    autoMode.resetPersonalization()
+                }
+                updateMenuState(
+                    message: "Personalization reset · \(removedCount) corrections removed"
+                )
+                return removedCount
             }
         )
     )
@@ -198,35 +230,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         appIconController.start()
-        aiSettings.modeDidChange = { [weak self] mode in
-            guard let self else {
-                return
+        if PaneCueReleaseProfile.current.isExperimental {
+            aiSettings.modeDidChange = { [weak self] mode in
+                guard let self else {
+                    return
+                }
+                if mode == .cloud {
+                    offlinePack.unloadModels()
+                }
+                updateMenuState(message: mode.detail)
             }
-            if mode == .cloud {
-                offlinePack.unloadModels()
+            connectivity.statusDidChange = { [weak self] online in
+                guard let self else {
+                    return
+                }
+                if online, aiSettings.processingMode == .automatic {
+                    offlinePack.unloadModels()
+                }
+                updateMenuState(
+                    message: online
+                        ? "Internet connection available"
+                        : "PaneCue is ready to use the Offline Pack"
+                )
             }
-            updateMenuState(message: mode.detail)
-        }
-        connectivity.statusDidChange = { [weak self] online in
-            guard let self else {
-                return
+            callVideoPreview.onUserClose = { [weak self] in
+                self?.updateMenuState(message: "Floating video closed")
             }
-            if online, aiSettings.processingMode == .automatic {
-                offlinePack.unloadModels()
-            }
-            updateMenuState(
-                message: online
-                    ? "Internet connection available"
-                    : "PaneCue is ready to use the Offline Pack"
-            )
-        }
-        callVideoPreview.onUserClose = { [weak self] in
-            self?.updateMenuState(message: "Floating video closed")
+        } else {
+            aiSettings.processingMode = .offline
+            aiSettings.localCommandModel = .smart
         }
         configureStatusItem()
         configureGlobalHotKey()
         configureCustomScenarioHotKeys()
-        autoMode.start()
+        if PaneCueReleaseProfile.current.isExperimental {
+            autoMode.start()
+        }
         mainWindow.show()
     }
 
@@ -260,14 +299,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     systemSymbolName: "rectangle.split.2x1",
                     accessibilityDescription: "PaneCue"
                 )
-            button.toolTip = "PaneCue"
+            button.toolTip = PaneCueReleaseProfile.current.displayName
         }
 
         let menu = NSMenu()
         menu.delegate = self
 
         let openItem = NSMenuItem(
-            title: "Open PaneCue",
+            title: "Open Arrange",
             action: #selector(showMainWindow),
             keyEquivalent: ""
         )
@@ -294,7 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         apiKeyStatusItem.isEnabled = false
-        menu.addItem(apiKeyStatusItem)
 
         let apiKeyItem = NSMenuItem(
             title: "OpenAI API Key…",
@@ -302,9 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         apiKeyItem.target = self
-        menu.addItem(apiKeyItem)
-
-        menu.addItem(.separator())
 
         voiceCommandItem = NSMenuItem(
             title: "Start Voice Command (⌥ Space)",
@@ -312,17 +347,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         voiceCommandItem.target = self
-        menu.addItem(voiceCommandItem)
 
         autoModeItem = NSMenuItem(
-            title: "Auto Mode",
+            title: "Suggestions Beta",
             action: #selector(toggleAutoMode),
             keyEquivalent: ""
         )
         autoModeItem.target = self
-        menu.addItem(autoModeItem)
-
-        menu.addItem(.separator())
 
         let codeAndCallItem = NSMenuItem(
             title: "Code + Call",
@@ -330,7 +361,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "1"
         )
         codeAndCallItem.target = self
-        menu.addItem(codeAndCallItem)
 
         let documentationAndCodeItem = NSMenuItem(
             title: "Documentation + Code",
@@ -338,7 +368,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "2"
         )
         documentationAndCodeItem.target = self
-        menu.addItem(documentationAndCodeItem)
 
         let notesAndBrowserItem = NSMenuItem(
             title: "Notes + Browser",
@@ -346,7 +375,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "3"
         )
         notesAndBrowserItem.target = self
-        menu.addItem(notesAndBrowserItem)
 
         let browserVideoItem = NSMenuItem(
             title: "Browser Video",
@@ -354,11 +382,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "4"
         )
         browserVideoItem.target = self
-        menu.addItem(browserVideoItem)
 
-        customScenariosMenu = NSMenu(title: "Custom Scenarios")
+        if PaneCueReleaseProfile.current.isExperimental {
+            menu.addItem(apiKeyStatusItem)
+            menu.addItem(apiKeyItem)
+            menu.addItem(.separator())
+            menu.addItem(voiceCommandItem)
+            menu.addItem(autoModeItem)
+            menu.addItem(.separator())
+            menu.addItem(codeAndCallItem)
+            menu.addItem(documentationAndCodeItem)
+            menu.addItem(notesAndBrowserItem)
+            menu.addItem(browserVideoItem)
+        }
+
+        customScenariosMenu = NSMenu(title: "Cues")
         let customScenariosItem = NSMenuItem(
-            title: "Custom Scenarios",
+            title: "Cues",
             action: nil,
             keyEquivalent: ""
         )
@@ -366,7 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(customScenariosItem)
 
         let editScenariosItem = NSMenuItem(
-            title: "Edit Custom Scenarios…",
+            title: "Edit Cues…",
             action: #selector(editCustomScenarios),
             keyEquivalent: ","
         )
@@ -405,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if customScenarioStore.scenarios.isEmpty {
             let emptyItem = NSMenuItem(
-                title: "No Custom Scenarios",
+                title: "No Cues",
                 action: nil,
                 keyEquivalent: ""
             )
@@ -466,17 +506,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 trusted
                     ? (
                         windowManager.currentScenarioName.map { "\($0) is active" }
-                            ?? (callVideoPreview.isCapturing ? "Floating video is active" : "Ready")
+                            ?? (
+                                PaneCueReleaseProfile.current.isExperimental
+                                    && callVideoPreview.isCapturing
+                                    ? "Floating video is active"
+                                    : "Ready"
+                            )
                     )
                     : "Accessibility access is required"
             )
         accessibilityItem.isHidden = trusted
-        autoModeItem.state = autoMode.isEnabled ? .on : .off
-        apiKeyStatusItem.title = apiKeyStore.hasKey
-            ? "Voice: OpenAI key is in Keychain"
-            : "Voice: OpenAI key is not configured"
+        let suggestionsEnabled =
+            PaneCueReleaseProfile.current.isExperimental
+                ? autoMode.isEnabled
+                : false
+        autoModeItem.state = suggestionsEnabled ? .on : .off
+        if PaneCueReleaseProfile.current.isExperimental {
+            apiKeyStatusItem.title = apiKeyStore.hasKey
+                ? "Voice: OpenAI key is in Keychain"
+                : "Voice: OpenAI key is not configured"
+        }
         restoreItem.isEnabled = windowManager.canRestore
-            || callVideoPreview.isCapturing
+            || (
+                PaneCueReleaseProfile.current.isExperimental
+                    && callVideoPreview.isCapturing
+            )
 
         mainWindow.update(
             PaneCueDashboardSnapshot(
@@ -484,7 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 activeScenarioName: windowManager.currentScenarioName,
                 voiceState: voiceCommand.state,
                 canRestore: restoreItem.isEnabled,
-                isAutoModeEnabled: autoMode.isEnabled
+                isAutoModeEnabled: suggestionsEnabled
             )
         )
     }
@@ -493,7 +547,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             globalHotKey = try GlobalHotKeyController { [weak self] in
                 Task { @MainActor [weak self] in
-                    self?.toggleVoiceCommand()
+                    guard let self else {
+                        return
+                    }
+                    if PaneCueReleaseProfile.current.isExperimental {
+                        self.toggleVoiceCommand()
+                    } else {
+                        self.mainWindow.show(section: .arrange)
+                    }
                 }
             }
         } catch {
@@ -514,7 +575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             customScenarioHotKeys = controller
             if !controller.unavailableShortcuts.isEmpty {
                 updateMenuState(
-                    message: "Some scenario shortcuts are already used by macOS or another app"
+                    message: "Some Cue shortcuts are already used by macOS or another app"
                 )
             }
         } catch {
@@ -529,6 +590,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func requestScreenRecordingAccess() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         guard !CGPreflightScreenCaptureAccess() else {
             updateMenuState(message: "Screen Recording access is enabled")
             return
@@ -604,7 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func editCustomScenarios() {
-        mainWindow.show(section: .scenarios)
+        mainWindow.show(section: .cues)
     }
 
     @objc
@@ -637,6 +701,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func runBuiltInFromDashboard(
         _ action: VoiceCommandAction
     ) {
+        if !PaneCueReleaseProfile.current.isExperimental,
+           (
+               action == .applyCodeAndCall
+                   || action == .showBrowserVideo
+           ) {
+            return
+        }
         beginUserInitiatedScenario()
         switch action {
         case .applyCodeAndCall:
@@ -675,6 +746,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func configureOpenAIKey() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         if voiceCommand.state != .idle {
             voiceCommand.cancel()
             voiceHUD.hide()
@@ -690,6 +764,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func toggleAutoMode() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         autoMode.toggle()
     }
 
@@ -704,7 +781,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 autoMode.markApplied(suggestion)
                 updateMenuState(
-                    message: "Auto Mode is applying \(suggestion.scenario.title)…"
+                    message: "Suggestions Beta is applying \(suggestion.scenario.title)…"
                 )
                 runBuiltInFromDashboard(suggestion.scenario.action)
             },
@@ -713,21 +790,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
                 autoMode.dismiss(suggestion)
-                updateMenuState(message: "Auto Mode is watching")
+                updateMenuState(message: "Suggestions Beta is watching")
             }
         )
         updateMenuState(
-            message: "Auto Mode suggests \(suggestion.scenario.title)"
+            message: "Suggestions Beta suggests \(suggestion.scenario.title)"
         )
     }
 
     private func beginUserInitiatedScenario() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         autoModeSuggestionPanel.hide()
         autoMode.pauseSuggestions(for: 60)
     }
 
     @objc
     private func toggleVoiceCommand() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            mainWindow.show(section: .arrange)
+            return
+        }
         guard !commandLab.isListening else {
             presentError(CommandLabError.unavailable)
             return
@@ -785,6 +869,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func executeVoiceAction(
         _ call: RealtimeToolCall
     ) async throws -> String {
+        if !PaneCueReleaseProfile.current.isExperimental,
+           (
+               call.action == .applyCodeAndCall
+                   || call.action == .showBrowserVideo
+           ) {
+            throw PaneCueWindowError.operationFailed(
+                details: "Call and browser video are available only in PaneCue Experimental."
+            )
+        }
+        try ensureAccessibilityForApply()
         try await applicationLauncher.ensureApplications(
             for: call.action
         )
@@ -829,7 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   let scenario = customScenarioStore.scenario(named: name)
             else {
                 throw PaneCueWindowError.operationFailed(
-                    details: "The requested custom scenario no longer exists. Open the scenario editor and save it again."
+                    details: "The requested Cue no longer exists. Open Cues and save it again."
                 )
             }
             return try await applyCustomScenario(scenario)
@@ -875,6 +969,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func applyCodeAndCall() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         beginUserInitiatedScenario()
         Task { @MainActor in
             do {
@@ -894,6 +991,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func showBrowserVideo() {
+        guard PaneCueReleaseProfile.current.isExperimental else {
+            return
+        }
         beginUserInitiatedScenario()
         Task { @MainActor in
             do {
@@ -916,9 +1016,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyCustomScenario(
         _ scenario: CustomScenario
     ) async throws -> String {
+        try ensureAccessibilityForApply()
         await callVideoPreview.stopCapture()
-        try await applicationLauncher.ensureApplications(for: scenario)
-        return try windowManager.applyCustomLayout(scenario)
+        var effectiveScenario = scenario
+        if !PaneCueReleaseProfile.current.isExperimental {
+            effectiveScenario.conditions = ScenarioConditions()
+        }
+        try await applicationLauncher.ensureApplications(
+            for: effectiveScenario
+        )
+        return try windowManager.applyCustomLayout(effectiveScenario)
+    }
+
+    private func ensureAccessibilityForApply() throws {
+        guard !windowManager.hasAccessibilityPermission else {
+            return
+        }
+        _ = windowManager.requestAccessibilityPermission()
+        updateMenuState(
+            message: "Accessibility access is required before Apply"
+        )
+        throw PaneCueWindowError.accessibilityPermissionRequired
     }
 
     @objc

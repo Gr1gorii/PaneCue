@@ -154,6 +154,16 @@ enum AXHelpers {
         )
     }
 
+    static func canSetFrame(on element: AXUIElement) -> Bool {
+        isSettable(
+            element,
+            attribute: kAXPositionAttribute as CFString
+        ) && isSettable(
+            element,
+            attribute: kAXSizeAttribute as CFString
+        )
+    }
+
     static func setMinimized(
         _ minimized: Bool,
         on element: AXUIElement

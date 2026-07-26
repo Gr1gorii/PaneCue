@@ -22,23 +22,45 @@ The public-beta product contract is defined by:
 - [Platform and application support matrix](docs/product-freeze/v0.1/v0.1-support-matrix.md)
 - [Release, privacy, interface, and success decisions](docs/product-freeze/v0.1/v0.1-decisions.md)
 
-The prototype description below records the current implementation and can
-include experimental capabilities that are intentionally excluded from the
-v0.1 public-beta build.
+The repository now packages two explicit profiles from the same codebase:
 
-PaneCue now opens as a regular macOS application with an Overview,
-Custom Scenarios editor, and Settings screen. Closing the main window does
+- **PaneCue** is the v0.1 candidate. It opens directly in Arrange, processes
+  commands locally, and contains no active browser-video, call-capture,
+  cloud-voice, BYOK, or Suggestions Beta entry points.
+- **PaneCue Experimental** preserves the prototype video, cloud voice,
+  alternative-model, and Suggestions Beta work behind a separately identified
+  app bundle.
+
+The prototype description below records experimental capabilities that are
+intentionally excluded from the v0.1 public-beta build.
+
+PaneCue now opens as a regular macOS application with Arrange, Cues, and
+Settings. Closing the main window does
 not quit the app: the PaneCue icon remains in the menu bar for quick access,
 and reopening the Dock icon restores the window.
 
-On first launch, a guided setup explains every macOS permission before
-requesting it. Permissions are requested one at a time and only after the user
-presses **Grant Access**. The setup is shown once, can be completed later, and
-can be reopened from **Settings → Permissions → Guided Setup**.
+Cues can be imported from and exported to versioned `.panecuecue.json` files.
+Imports preserve existing Cues, regenerate identifiers, and disable only
+conflicting activation phrases or shortcuts. Settings also provides a local
+diagnostics preview with manual JSON export and Reset Personalization for
+removing saved command corrections without deleting Cues or credentials.
 
-The current technical slice supports four built-in scenarios, custom
-scenarios, Auto Mode suggestions, automatic application launching, and voice
-routing:
+On first launch, the stable app opens directly in Arrange without requesting
+permissions. Accessibility is requested contextually after the first explicit
+Apply. Optional offline speech becomes available after that first successful
+text arrangement.
+
+Immediately before Apply, PaneCue refreshes the target-window inventory and
+blocks closed, ambiguous, minimized, full-screen, or non-resizable targets
+with a visible reason. The result lists every target as moved, unchanged,
+skipped, or failed. A complete Apply offers Undo beside the result; a partial
+Apply offers Rollback for the snapshotted windows.
+
+PaneCue Experimental retains a guided setup that explains its additional
+permissions before requesting them.
+
+The experimental profile supports four built-in scenarios, Cues, Suggestions
+Beta, automatic application launching, and cloud voice routing:
 
 - **Code + Call** recognizes an IDE and a native or browser meeting, keeps the IDE dominant, and shows the call in a PaneCue-owned floating panel.
 - **Documentation + Code** places a recognized code editor at 65% and a browser, Preview, or Dash at 35%.
@@ -52,7 +74,7 @@ routing:
   visual player detection and never reveal the full browser while PaneCue is
   still looking for a player.
 
-**Auto Mode** runs locally and watches only application/window metadata. It
+**Suggestions Beta** runs locally and watches only application/window metadata. It
 uses the active and previously active application to suggest Code + Call,
 Documentation + Code, or Notes + Browser. A compact panel explains the
 suggestion and waits for **Apply** or **Not now**; Auto Mode never rearranges
@@ -85,8 +107,8 @@ For this local prototype, the user supplies an OpenAI API key and PaneCue stores
 - Accessibility permission for the packaged `PaneCue.app`
 - Microphone permission only for voice commands
 - Speech Recognition permission only for Automatic or Offline voice commands
-- Screen Recording permission only for floating call and browser video
-- An OpenAI API key only when Automatic or Cloud voice processing is used
+- Screen Recording permission only for experimental floating call and browser video
+- An OpenAI API key only in the experimental Automatic or Cloud voice modes
 
 Full Xcode is not required for the current Swift Package prototype.
 
@@ -98,7 +120,14 @@ swift test
 open build/PaneCue.app
 ```
 
-The first-launch setup lets you choose how voice commands are processed:
+To build the separate experimental app:
+
+```sh
+./scripts/package_app.sh --experimental
+open "build/PaneCue Experimental.app"
+```
+
+The PaneCue Experimental first-launch setup lets you choose how voice commands are processed:
 
 - **Automatic** uses OpenAI while online and the local pack without internet.
 - **Offline Only** keeps audio and command text on the Mac.

@@ -4,11 +4,11 @@ import CoreGraphics
 import PaneCueCore
 @preconcurrency import Speech
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum PaneCueDashboardSection: String, CaseIterable, Identifiable {
-    case overview
-    case commandLab
-    case scenarios
+    case arrange
+    case cues
     case settings
 
     var id: Self {
@@ -17,12 +17,10 @@ enum PaneCueDashboardSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .overview:
-            return "Overview"
-        case .commandLab:
-            return "Command Lab"
-        case .scenarios:
-            return "Custom Scenarios"
+        case .arrange:
+            return "Arrange"
+        case .cues:
+            return "Cues"
         case .settings:
             return "Settings"
         }
@@ -30,11 +28,9 @@ enum PaneCueDashboardSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .overview:
-            return "rectangle.grid.2x2"
-        case .commandLab:
-            return "waveform.badge.magnifyingglass"
-        case .scenarios:
+        case .arrange:
+            return "rectangle.3.group"
+        case .cues:
             return "rectangle.split.2x1"
         case .settings:
             return "gearshape"
@@ -74,7 +70,8 @@ struct PaneCueDashboardActions {
     let applyAnalyzedCommand:
         (VoiceCommandIntent) async throws -> String
     let applyWorkspacePlan:
-        (WorkspacePlan) async throws -> String
+        (WorkspacePlan) async throws -> WorkspaceApplyResult
+    let rollbackWorkspace: () async throws -> String
     let saveCommandCorrection:
         (String, VoiceCommandIntent?) -> Void
     let savePlanCorrection:
@@ -82,11 +79,13 @@ struct PaneCueDashboardActions {
     let startCommandLabListening: @MainActor () async throws -> Void
     let stopCommandLabListening: @MainActor () async throws -> String
     let cancelCommandLabListening: () -> Void
+    let makeDiagnosticsReport: () -> String
+    let resetPersonalization: () -> Int
 }
 
 @MainActor
 final class PaneCueDashboardModel: ObservableObject {
-    @Published var selectedSection: PaneCueDashboardSection = .overview
+    @Published var selectedSection: PaneCueDashboardSection = .arrange
     @Published private(set) var scenarios: [CustomScenario]
     @Published private(set) var statusMessage = "Ready"
     @Published private(set) var activeScenarioName: String?
@@ -101,6 +100,7 @@ final class PaneCueDashboardModel: ObservableObject {
         SFSpeechRecognizer.authorizationStatus()
     @Published private(set) var hasAPIKey = false
     @Published private(set) var isAutoModeEnabled = false
+    @Published private(set) var hasCompletedTextOnboarding = false
     @Published private(set) var editorRevision = 0
     @Published var isOnboardingPresented: Bool
 
@@ -117,6 +117,8 @@ final class PaneCueDashboardModel: ObservableObject {
     private static let onboardingVersion = 1
     private static let onboardingVersionKey =
         "PaneCue.Onboarding.completedVersion"
+    private static let textOnboardingKey =
+        "PaneCue.Arrange.completedFirstApply"
 
     var hasMicrophonePermission: Bool {
         microphoneAuthorizationStatus == .authorized
@@ -155,10 +157,14 @@ final class PaneCueDashboardModel: ObservableObject {
         self.defaults = defaults
         self.actions = actions
         isOnboardingPresented =
-            defaults.integer(forKey: Self.onboardingVersionKey)
-                < Self.onboardingVersion
+            PaneCueReleaseProfile.current.isExperimental
+                && defaults.integer(forKey: Self.onboardingVersionKey)
+                    < Self.onboardingVersion
         scenarios = store.scenarios
         applications = ApplicationCatalog.installedApplications()
+        hasCompletedTextOnboarding = defaults.bool(
+            forKey: Self.textOnboardingKey
+        )
         refreshPermissions()
     }
 
@@ -173,17 +179,20 @@ final class PaneCueDashboardModel: ObservableObject {
 
     func refreshPermissions() {
         hasAccessibilityPermission = AXIsProcessTrusted()
-        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+        hasScreenRecordingPermission =
+            PaneCueReleaseProfile.current.isExperimental
+                && CGPreflightScreenCaptureAccess()
         microphoneAuthorizationStatus =
             AVCaptureDevice.authorizationStatus(for: .audio)
         speechRecognitionAuthorizationStatus =
             SFSpeechRecognizer.authorizationStatus()
-        hasAPIKey = keyStore.hasKey
+        hasAPIKey = PaneCueReleaseProfile.current.isExperimental
+            && keyStore.hasKey
     }
 
     func openScenarios() {
         editorRevision += 1
-        selectedSection = .scenarios
+        selectedSection = .cues
     }
 
     func saveScenarios(_ updatedScenarios: [CustomScenario]) {
@@ -191,7 +200,7 @@ final class PaneCueDashboardModel: ObservableObject {
         scenarios = store.scenarios
         editorRevision += 1
         actions.scenariosDidChange()
-        selectedSection = .overview
+        selectedSection = .cues
     }
 
     func runBuiltIn(_ action: VoiceCommandAction) {
@@ -245,7 +254,7 @@ final class PaneCueDashboardModel: ObservableObject {
             forKey: Self.onboardingVersionKey
         )
         isOnboardingPresented = false
-        selectedSection = .overview
+        selectedSection = .arrange
     }
 
     func setAutoModeEnabled(_ enabled: Bool) {
@@ -265,13 +274,23 @@ final class PaneCueDashboardModel: ObservableObject {
     func applyAnalyzedCommand(
         _ intent: VoiceCommandIntent
     ) async throws -> String {
-        try await actions.applyAnalyzedCommand(intent)
+        let summary = try await actions.applyAnalyzedCommand(intent)
+        completeTextOnboarding()
+        return summary
     }
 
     func applyWorkspacePlan(
         _ plan: WorkspacePlan
-    ) async throws -> String {
-        try await actions.applyWorkspacePlan(plan)
+    ) async throws -> WorkspaceApplyResult {
+        let result = try await actions.applyWorkspacePlan(plan)
+        if result.didChangeAnyWindow {
+            completeTextOnboarding()
+        }
+        return result
+    }
+
+    func rollbackLastApply() async throws -> String {
+        try await actions.rollbackWorkspace()
     }
 
     func saveCommandCorrection(
@@ -297,7 +316,7 @@ final class PaneCueDashboardModel: ObservableObject {
     ) throws -> String {
         guard let scenario = plan.scenario(named: name) else {
             throw PaneCueWindowError.operationFailed(
-                details: "A saved scenario needs a name and at least two windows."
+                details: "A saved Cue needs a name and at least two windows."
             )
         }
         var updated = scenarios
@@ -328,6 +347,23 @@ final class PaneCueDashboardModel: ObservableObject {
 
     func cancelCommandLabListening() {
         actions.cancelCommandLabListening()
+    }
+
+    func makeDiagnosticsReport() -> String {
+        actions.makeDiagnosticsReport()
+    }
+
+    @discardableResult
+    func resetPersonalization() -> Int {
+        actions.resetPersonalization()
+    }
+
+    private func completeTextOnboarding() {
+        guard !hasCompletedTextOnboarding else {
+            return
+        }
+        defaults.set(true, forKey: Self.textOnboardingKey)
+        hasCompletedTextOnboarding = true
     }
 }
 
@@ -388,9 +424,9 @@ final class MainWindowController {
     }
 
     func show(
-        section: PaneCueDashboardSection = .overview
+        section: PaneCueDashboardSection = .arrange
     ) {
-        if section == .scenarios {
+        if section == .cues {
             model.openScenarios()
         } else {
             model.selectedSection = section
@@ -558,27 +594,38 @@ private struct PaneCueDashboardView: View {
                     .lineLimit(1)
                 }
 
-                Button {
-                    model.toggleVoice()
-                } label: {
-                    Label(
-                        model.voiceState == .listening
-                            ? "Run Voice Command"
-                            : "Voice Command",
-                        systemImage: model.voiceState == .listening
-                            ? "waveform"
-                            : "mic"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.voiceState == .processing)
+                if PaneCueReleaseProfile.current.isExperimental {
+                    Button {
+                        model.toggleVoice()
+                    } label: {
+                        Label(
+                            model.voiceState == .listening
+                                ? "Run Voice Command"
+                                : "Voice Command",
+                            systemImage: model.voiceState == .listening
+                                ? "waveform"
+                                : "mic"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(model.voiceState == .processing)
 
-                Text("⌥ Space")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
+                    Text("⌥ Space")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Button {
+                        model.selectedSection = .arrange
+                    } label: {
+                        Label("New Arrangement", systemImage: "plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
             }
             .padding(14)
         }
@@ -587,17 +634,15 @@ private struct PaneCueDashboardView: View {
     @ViewBuilder
     private var detail: some View {
         switch model.selectedSection {
-        case .overview:
-            PaneCueOverviewView(model: model)
-        case .commandLab:
+        case .arrange:
             CommandLabView(model: model)
-        case .scenarios:
+        case .cues:
             ScenarioEditorView(
                 initialScenarios: model.scenarios,
                 applications: model.applications,
                 onSave: { model.saveScenarios($0) },
                 onClose: {
-                    model.selectedSection = .overview
+                    model.selectedSection = .arrange
                 }
             )
             .id(model.editorRevision)
@@ -630,7 +675,7 @@ private struct PaneCueOverviewView: View {
 
                 VStack(alignment: .leading, spacing: 14) {
                     sectionTitle(
-                        "Quick Scenarios",
+                        "Quick Cues",
                         detail: "One click arranges the workspace."
                     )
 
@@ -733,7 +778,7 @@ private struct PaneCueOverviewView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 sectionTitle(
-                    "Custom Scenarios",
+                    "Cues",
                     detail: model.scenarios.isEmpty
                         ? "Create a workspace around your own apps."
                         : "\(model.scenarios.count) saved"
@@ -763,7 +808,7 @@ private struct PaneCueOverviewView: View {
                             .foregroundStyle(Color.accentColor)
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Build your first scenario")
+                            Text("Build your first Cue")
                                 .font(.headline)
                             Text(
                                 "Choose two applications and decide how much space each one gets."
@@ -1072,6 +1117,9 @@ private struct PaneCueSettingsView: View {
     @ObservedObject var aiSettings: AIEngineSettingsStore
     @ObservedObject var connectivity: ConnectivityMonitor
     @ObservedObject var offlinePack: OfflinePackManager
+    @State private var diagnosticsReport: String?
+    @State private var isResetConfirmationPresented = false
+    @State private var privacyActionMessage = ""
 
     var body: some View {
         ScrollView {
@@ -1100,16 +1148,18 @@ private struct PaneCueSettingsView: View {
                         model.requestAccessibility()
                     }
 
-                    Divider()
+                    if PaneCueReleaseProfile.current.isExperimental {
+                        Divider()
 
-                    PermissionRow(
-                        title: "Screen Recording",
-                        detail: "Extract call and browser video",
-                        systemImage: "record.circle",
-                        isGranted: model.hasScreenRecordingPermission,
-                        actionTitle: "Grant Access"
-                    ) {
-                        model.requestScreenRecordingAccess()
+                        PermissionRow(
+                            title: "Screen Recording",
+                            detail: "Extract call and browser video",
+                            systemImage: "record.circle",
+                            isGranted: model.hasScreenRecordingPermission,
+                            actionTitle: "Grant Access"
+                        ) {
+                            model.requestScreenRecordingAccess()
+                        }
                     }
 
                     Divider()
@@ -1136,25 +1186,28 @@ private struct PaneCueSettingsView: View {
                         model.requestSpeechRecognitionAccess()
                     }
 
-                    Divider()
+                    if PaneCueReleaseProfile.current.isExperimental {
+                        Divider()
 
-                    SettingRow(
-                        title: "Guided Setup",
-                        detail: "Review these permissions one at a time",
-                        systemImage: "checklist",
-                        statusColor: .blue
-                    ) {
-                        Button("Run Setup…") {
-                            model.presentOnboarding()
+                        SettingRow(
+                            title: "Guided Setup",
+                            detail: "Review experimental permissions one at a time",
+                            systemImage: "checklist",
+                            statusColor: .blue
+                        ) {
+                            Button("Run Setup…") {
+                                model.presentOnboarding()
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
 
-                SettingsGroup(
-                    title: "AI Processing",
-                    detail: "Choose when PaneCue may use the cloud."
-                ) {
+                if PaneCueReleaseProfile.current.isExperimental {
+                    SettingsGroup(
+                        title: "AI Processing · Experimental",
+                        detail: "Choose when PaneCue Experimental may use the cloud."
+                    ) {
                     SettingRow(
                         title: "Processing Mode",
                         detail: aiSettings.processingMode.detail,
@@ -1234,12 +1287,12 @@ private struct PaneCueSettingsView: View {
                     ) {
                         offlinePackControl
                     }
-                }
+                    }
 
-                SettingsGroup(
-                    title: "Voice Commands",
-                    detail: "Use Russian or English with the global shortcut."
-                ) {
+                    SettingsGroup(
+                        title: "Cloud Voice · Experimental",
+                        detail: "Use Russian or English with the global shortcut."
+                    ) {
                     SettingRow(
                         title: "OpenAI API Key",
                         detail: model.hasAPIKey
@@ -1283,32 +1336,103 @@ private struct PaneCueSettingsView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
+                    }
+                } else {
+                    SettingsGroup(
+                        title: "Local Intelligence",
+                        detail: "The stable build processes arrangement commands on this Mac."
+                    ) {
+                        SettingRow(
+                            title: "Processing",
+                            detail: "No command text or window data is sent over the network",
+                            systemImage: "lock.laptopcomputer",
+                            statusColor: .green
+                        ) {
+                            Text("Offline Only")
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
+
+                        Divider()
+
+                        SettingRow(
+                            title: "Command Model",
+                            detail: "Bundled, lightweight parser for Russian and English",
+                            systemImage: "cpu",
+                            statusColor: .blue
+                        ) {
+                            Text("PaneCue Mini v2")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                SettingsGroup(
+                    title: "Privacy & Local Data",
+                    detail: "Nothing is transmitted automatically."
+                ) {
+                    SettingRow(
+                        title: "Diagnostics",
+                        detail: "Preview a sanitized local report before exporting it",
+                        systemImage: "stethoscope",
+                        statusColor: .blue
+                    ) {
+                        Button("Preview…") {
+                            diagnosticsReport = model.makeDiagnosticsReport()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Divider()
+
+                    SettingRow(
+                        title: "Reset Personalization",
+                        detail: "Remove command corrections and local learning; Cues stay saved",
+                        systemImage: "arrow.counterclockwise.circle",
+                        statusColor: .orange
+                    ) {
+                        Button("Reset…", role: .destructive) {
+                            isResetConfirmationPresented = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if !privacyActionMessage.isEmpty {
+                        Divider()
+                        Text(privacyActionMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 10)
+                    }
                 }
 
                 SettingsGroup(
                     title: "App Behavior",
                     detail: "Fast access stays available when the window is closed."
                 ) {
-                    SettingRow(
-                        title: "Auto Mode",
-                        detail: "Suggest layouts locally and wait for approval",
-                        systemImage: "sparkles.rectangle.stack",
-                        statusColor: model.isAutoModeEnabled
-                            ? .purple
-                            : .secondary
-                    ) {
-                        Toggle(
-                            "",
-                            isOn: Binding(
-                                get: { model.isAutoModeEnabled },
-                                set: { model.setAutoModeEnabled($0) }
+                    if PaneCueReleaseProfile.current.isExperimental {
+                        SettingRow(
+                            title: "Suggestions Beta",
+                            detail: "Suggest layouts locally and wait for approval",
+                            systemImage: "sparkles.rectangle.stack",
+                            statusColor: model.isAutoModeEnabled
+                                ? .purple
+                                : .secondary
+                        ) {
+                            Toggle(
+                                "",
+                                isOn: Binding(
+                                    get: { model.isAutoModeEnabled },
+                                    set: { model.setAutoModeEnabled($0) }
+                                )
                             )
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                    }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                        }
 
-                    Divider()
+                        Divider()
+                    }
 
                     SettingRow(
                         title: "Menu Bar",
@@ -1330,6 +1454,32 @@ private struct PaneCueSettingsView: View {
             .padding(.horizontal, 34)
             .padding(.vertical, 30)
             .frame(maxWidth: 840, alignment: .leading)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { diagnosticsReport != nil },
+                set: { if !$0 { diagnosticsReport = nil } }
+            )
+        ) {
+            DiagnosticsPreviewView(
+                report: diagnosticsReport ?? ""
+            )
+        }
+        .alert(
+            "Reset Personalization?",
+            isPresented: $isResetConfirmationPresented
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                let removedCount = model.resetPersonalization()
+                privacyActionMessage = removedCount == 0
+                    ? "Personalization was already empty."
+                    : "Removed \(removedCount) saved correction\(removedCount == 1 ? "" : "s")."
+            }
+        } message: {
+            Text(
+                "This removes saved command corrections and local learning. Your Cues, permissions, and API key are not changed."
+            )
         }
     }
 
@@ -1420,6 +1570,113 @@ private struct PaneCueSettingsView: View {
             return "No audio or command text leaves this Mac"
         case .cloud:
             return "Local models remain unloaded from memory"
+        }
+    }
+}
+
+private struct DiagnosticsPreviewView: View {
+    let report: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var exportError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "stethoscope")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 48, height: 48)
+                    .background(
+                        Color.blue.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Diagnostics Preview")
+                        .font(.title2.weight(.semibold))
+                    Text(
+                        "Review the complete report. No file is created until you press Export."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(22)
+
+            ScrollView {
+                Text(report)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.primary.opacity(0.1))
+                }
+                .padding(.horizontal, 22)
+
+            Label(
+                "No window titles, application names, bundle identifiers, URLs, or document paths are included.",
+                systemImage: "lock.shield"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 22)
+            .padding(.top, 12)
+
+            HStack {
+                Spacer()
+                Button("Close") {
+                    dismiss()
+                }
+                Button {
+                    export()
+                } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(22)
+        }
+        .frame(width: 720, height: 620)
+        .alert(
+            "Diagnostics Export Failed",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                exportError = nil
+            }
+        } message: {
+            Text(exportError ?? "Unknown error")
+        }
+    }
+
+    private func export() {
+        let panel = NSSavePanel()
+        panel.title = "Export PaneCue Diagnostics"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "PaneCue-Diagnostics.json"
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        do {
+            try Data(report.utf8).write(to: url, options: .atomic)
+            dismiss()
+        } catch {
+            exportError = error.localizedDescription
         }
     }
 }

@@ -15,6 +15,8 @@ struct CommandLabView: View {
     @State private var isListening = false
     @State private var feedback = ""
     @State private var errorMessage: String?
+    @State private var applyResult: WorkspaceApplyResult?
+    @State private var didRollback = false
 
     var body: some View {
         ScrollView {
@@ -53,10 +55,10 @@ struct CommandLabView: View {
             .frame(width: 56, height: 56)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("Command Lab")
+                Text("Arrange")
                     .font(.system(size: 29, weight: .bold, design: .rounded))
                 Text(
-                    "Test PaneCue Mini safely. Nothing moves until you approve the preview."
+                    "Describe your workspace in Russian or English. Nothing moves until you approve the preview."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -117,7 +119,8 @@ struct CommandLabView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                     .disabled(isAnalyzing || isApplying)
-                } else {
+                } else if PaneCueReleaseProfile.current.isExperimental
+                    || model.hasCompletedTextOnboarding {
                     Button {
                         toggleListening()
                     } label: {
@@ -139,6 +142,8 @@ struct CommandLabView: View {
                         hasAnalyzed = false
                         feedback = ""
                         errorMessage = nil
+                        applyResult = nil
+                        didRollback = false
                     }
                     .buttonStyle(.borderless)
                 }
@@ -151,7 +156,7 @@ struct CommandLabView: View {
                             .controlSize(.small)
                     } else {
                         Label(
-                            "Analyze Command",
+                            "Create Preview",
                             systemImage: "sparkles"
                         )
                     }
@@ -189,7 +194,7 @@ struct CommandLabView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         sectionHeader(
-                            "Workspace Plan",
+                            "Preview",
                             detail: "Drag a window or resize it from any side or corner."
                         )
                         Spacer()
@@ -213,6 +218,8 @@ struct CommandLabView: View {
                             },
                             set: {
                                 self.workspacePlan = $0
+                                self.applyResult = nil
+                                self.didRollback = false
                             }
                         ),
                         onCommit: { previous in
@@ -229,9 +236,11 @@ struct CommandLabView: View {
                         get: {
                             self.workspacePlan ?? workspacePlan
                         },
-                        set: {
-                            self.workspacePlan = $0
-                        }
+                            set: {
+                                self.workspacePlan = $0
+                                self.applyResult = nil
+                                self.didRollback = false
+                            }
                     ),
                     applications: model.applications,
                     canUndo: !planHistory.isEmpty,
@@ -274,6 +283,15 @@ struct CommandLabView: View {
                 .frame(width: 315)
             }
 
+            if let applyResult {
+                WorkspaceApplyResultCard(
+                    result: applyResult,
+                    didRollback: didRollback,
+                    isRollingBack: isApplying,
+                    onRollback: rollbackApply
+                )
+            }
+
             HStack(spacing: 12) {
                 if !feedback.isEmpty {
                     Label(feedback, systemImage: "checkmark.circle.fill")
@@ -289,6 +307,8 @@ struct CommandLabView: View {
                     planHistory = []
                     hasAnalyzed = false
                     feedback = ""
+                    applyResult = nil
+                    didRollback = false
                 }
                 .buttonStyle(.bordered)
 
@@ -367,6 +387,8 @@ struct CommandLabView: View {
                     self.workspacePlan = nil
                     hasAnalyzed = false
                     feedback = ""
+                    applyResult = nil
+                    didRollback = false
                 }
                 .buttonStyle(.bordered)
 
@@ -444,10 +466,16 @@ struct CommandLabView: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Try a command")
+            Text(
+                model.hasCompletedTextOnboarding
+                    ? "Try a command"
+                    : "Start with a text command"
+            )
                 .font(.headline)
             Text(
-                "“Open VS Code, Notes and Terminal”\n“Make Notes even smaller”\n“Add Terminal at the bottom”\n“Save this as Development”"
+                model.hasCompletedTextOnboarding
+                    ? "“Open VS Code, Notes and Terminal”\n“Make Notes even smaller”\n“Add Terminal at the bottom”\n“Save this as Development”"
+                    : "Type “Open VS Code, Notes and Terminal”, review the preview, then press Apply. Voice remains optional and becomes available after the first successful arrangement."
             )
             .font(.callout.monospaced())
             .foregroundStyle(.secondary)
@@ -478,6 +506,8 @@ struct CommandLabView: View {
         isAnalyzing = true
         errorMessage = nil
         feedback = ""
+        applyResult = nil
+        didRollback = false
         Task { @MainActor in
             defer {
                 isAnalyzing = false
@@ -587,9 +617,31 @@ struct CommandLabView: View {
                 isApplying = false
             }
             do {
-                feedback = try await model.applyWorkspacePlan(
+                let result = try await model.applyWorkspacePlan(
                     workspacePlan
                 )
+                applyResult = result
+                didRollback = false
+                feedback = ""
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func rollbackApply() {
+        guard applyResult?.canRollback == true, !didRollback else {
+            return
+        }
+        isApplying = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer {
+                isApplying = false
+            }
+            do {
+                feedback = try await model.rollbackLastApply()
+                didRollback = true
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -614,6 +666,143 @@ struct CommandLabView: View {
         analyzedIntent = nil
         hasAnalyzed = true
         feedback = "Undid the last draft change"
+        applyResult = nil
+        didRollback = false
+    }
+}
+
+private struct WorkspaceApplyResultCard: View {
+    let result: WorkspaceApplyResult
+    let didRollback: Bool
+    let isRollingBack: Bool
+    let onRollback: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 10) {
+                Label(result.summary, systemImage: summaryIcon)
+                    .font(.headline)
+                    .foregroundStyle(summaryColor)
+
+                Spacer()
+
+                if didRollback {
+                    Label(
+                        "Layout restored",
+                        systemImage: "arrow.uturn.backward.circle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                } else if result.canRollback {
+                    Button(action: onRollback) {
+                        Label(
+                            result.isPartial ? "Rollback" : "Undo Apply",
+                            systemImage: "arrow.uturn.backward"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRollingBack)
+                }
+            }
+
+            Divider()
+
+            VStack(spacing: 9) {
+                ForEach(result.outcomes) { outcome in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: outcome.status.icon)
+                            .foregroundStyle(outcome.status.color)
+                            .frame(width: 18)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(outcome.applicationName ?? outcome.targetName)
+                                .font(.callout.weight(.semibold))
+                            if let reason = outcome.reason {
+                                Text(reason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        Spacer()
+
+                        Text(outcome.status.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(outcome.status.color)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            summaryColor.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 15)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 15)
+                .stroke(summaryColor.opacity(0.22))
+        }
+    }
+
+    private var summaryIcon: String {
+        if result.failedCount > 0 || result.skippedCount > 0 {
+            return "exclamationmark.triangle.fill"
+        }
+        return result.didChangeAnyWindow
+            ? "checkmark.circle.fill"
+            : "minus.circle.fill"
+    }
+
+    private var summaryColor: Color {
+        if result.failedCount > 0 {
+            return .red
+        }
+        if result.skippedCount > 0 {
+            return .orange
+        }
+        return result.didChangeAnyWindow ? .green : .secondary
+    }
+}
+
+private extension WorkspaceApplyOutcomeStatus {
+    var title: String {
+        switch self {
+        case .moved:
+            return "Moved"
+        case .unchanged:
+            return "Unchanged"
+        case .skipped:
+            return "Skipped"
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .moved:
+            return "checkmark.circle.fill"
+        case .unchanged:
+            return "minus.circle.fill"
+        case .skipped:
+            return "forward.circle.fill"
+        case .failed:
+            return "xmark.octagon.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .moved:
+            return .green
+        case .unchanged:
+            return .secondary
+        case .skipped:
+            return .orange
+        case .failed:
+            return .red
+        }
     }
 }
 
@@ -642,7 +831,7 @@ private struct CommandLabInspector: View {
                 dynamicControls
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Scenario")
+                    Text("Cue")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(intent.action.commandLabDetail)
@@ -1198,7 +1387,7 @@ private extension VoiceCommandAction {
         case .showBrowserVideo:
             return "Browser Video"
         case .applyCustomScenario:
-            return "Custom Scenario"
+            return "Saved Cue"
         case .restorePreviousLayout:
             return "Restore Layout"
         }
@@ -1217,7 +1406,7 @@ private extension VoiceCommandAction {
         case .showBrowserVideo:
             return "Extract only the active browser player."
         case .applyCustomScenario:
-            return "Use the saved scenario named in the command."
+            return "Use the saved Cue named in the command."
         case .restorePreviousLayout:
             return "Return windows to their previous positions."
         }

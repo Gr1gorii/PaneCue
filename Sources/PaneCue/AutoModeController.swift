@@ -124,6 +124,16 @@ final class AutoModeController: NSObject {
         scheduleEvaluation(after: .seconds(1))
     }
 
+    func resetPersonalization() {
+        cooldownUntilByScenario.removeAll()
+        globalPauseUntil = .distantPast
+        lastActivatedApplicationPID = nil
+        lastFrontmostPID = nil
+        lastActiveRole = nil
+        previousRoleForCurrentActivation = nil
+        evaluationTask?.cancel()
+    }
+
     @objc
     private func workspaceDidChange(_ notification: Notification) {
         if notification.name

@@ -1,6 +1,7 @@
 import AppKit
 import PaneCueCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class ScenarioEditorController {
@@ -55,7 +56,7 @@ final class ScenarioEditorController {
             backing: .buffered,
             defer: false
         )
-        window.title = "PaneCue Scenario Editor 2.0"
+        window.title = "PaneCue Cues"
         window.contentViewController = NSHostingController(
             rootView: editorView
         )
@@ -75,6 +76,8 @@ struct ScenarioEditorView: View {
     @State private var selectedID: UUID?
     @State private var selectedWindowID: UUID?
     @State private var isGridExpanded = false
+    @State private var transferMessage = ""
+    @State private var transferError: String?
 
     let applications: [InstalledApplication]
     let onSave: ([CustomScenario]) -> Void
@@ -86,10 +89,17 @@ struct ScenarioEditorView: View {
         onSave: @escaping ([CustomScenario]) -> Void,
         onClose: @escaping () -> Void
     ) {
-        _scenarios = State(initialValue: initialScenarios)
-        _selectedID = State(initialValue: initialScenarios.first?.id)
+        let editableScenarios = initialScenarios.map { scenario in
+            var copy = scenario
+            if !PaneCueReleaseProfile.current.isExperimental {
+                copy.conditions = ScenarioConditions()
+            }
+            return copy
+        }
+        _scenarios = State(initialValue: editableScenarios)
+        _selectedID = State(initialValue: editableScenarios.first?.id)
         _selectedWindowID = State(
-            initialValue: initialScenarios.first?.windows.first?.id
+            initialValue: editableScenarios.first?.windows.first?.id
         )
         self.applications = applications
         self.onSave = onSave
@@ -111,10 +121,10 @@ struct ScenarioEditorView: View {
                         )
                     } else {
                         ContentUnavailableView(
-                            "No Scenario Selected",
+                            "No Cue Selected",
                             systemImage: "rectangle.3.group",
                             description: Text(
-                                "Create a scenario, then arrange its windows on the grid."
+                                "Create or import a Cue, then arrange its windows on the grid."
                             )
                         )
                     }
@@ -127,7 +137,11 @@ struct ScenarioEditorView: View {
             HStack {
                 Label(
                     validationMessage
-                        ?? "Scenarios are stored only on this Mac.",
+                        ?? (
+                            transferMessage.isEmpty
+                                ? "Cues are stored only on this Mac."
+                                : transferMessage
+                        ),
                     systemImage: validationMessage == nil
                         ? "lock"
                         : "exclamationmark.triangle"
@@ -139,12 +153,25 @@ struct ScenarioEditorView: View {
 
                 Spacer()
 
+                Button {
+                    importCues()
+                } label: {
+                    Label("Import…", systemImage: "square.and.arrow.down")
+                }
+
+                Button {
+                    exportSelectedCue()
+                } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(selectedIndex == nil || validationMessage != nil)
+
                 Button("Cancel") {
                     onClose()
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Save Scenarios") {
+                Button("Save Cues") {
                     onSave(scenarios)
                     onClose()
                 }
@@ -159,12 +186,25 @@ struct ScenarioEditorView: View {
                 $0.id == newID
             }?.windows.first?.id
         }
+        .alert(
+            "Cue Transfer Failed",
+            isPresented: Binding(
+                get: { transferError != nil },
+                set: { if !$0 { transferError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                transferError = nil
+            }
+        } message: {
+            Text(transferError ?? "Unknown error")
+        }
     }
 
     private var scenarioList: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("MY SCENARIOS")
+                Text("MY CUES")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -180,7 +220,7 @@ struct ScenarioEditorView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(
                             scenario.name.isEmpty
-                                ? "Untitled Scenario"
+                                ? "Untitled Cue"
                                 : scenario.name
                         )
                         .font(.body.weight(.medium))
@@ -205,14 +245,14 @@ struct ScenarioEditorView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("Add Scenario")
+                .help("Add Cue")
 
                 Button {
                     duplicateSelectedScenario()
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Duplicate Scenario")
+                .help("Duplicate Cue")
                 .disabled(selectedID == nil)
 
                 Button {
@@ -220,7 +260,7 @@ struct ScenarioEditorView: View {
                 } label: {
                     Image(systemName: "minus")
                 }
-                .help("Delete Scenario")
+                .help("Delete Cue")
                 .disabled(selectedID == nil)
 
                 Spacer()
@@ -238,7 +278,7 @@ struct ScenarioEditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Scenario 2.0")
+                    Text("Cue")
                         .font(.title2.weight(.semibold))
                     Spacer()
                     Text("\(scenario.wrappedValue.windows.count) of 8 windows")
@@ -248,7 +288,7 @@ struct ScenarioEditorView: View {
 
                 editorSection("BASIC") {
                     TextField(
-                        "Scenario name",
+                        "Cue name",
                         text: scenario.name
                     )
                     .textFieldStyle(.roundedBorder)
@@ -280,15 +320,17 @@ struct ScenarioEditorView: View {
                     }
                 }
 
-                editorSection("CONDITIONS") {
-                    Toggle(
-                        "Only while a call window is open",
-                        isOn: scenario.conditions.onlyDuringCall
-                    )
-                    Toggle(
-                        "Only when an external display is connected",
-                        isOn: scenario.conditions.requiresExternalDisplay
-                    )
+                if PaneCueReleaseProfile.current.isExperimental {
+                    editorSection("CONDITIONS · EXPERIMENTAL") {
+                        Toggle(
+                            "Only while a call window is open",
+                            isOn: scenario.conditions.onlyDuringCall
+                        )
+                        Toggle(
+                            "Only when an external display is connected",
+                            isOn: scenario.conditions.requiresExternalDisplay
+                        )
+                    }
                 }
 
                 editorSection("ACTIVATION") {
@@ -301,7 +343,7 @@ struct ScenarioEditorView: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         Text(
-                            "You can still say the scenario name if this is empty."
+                            "You can still say the Cue name if this is empty."
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -639,15 +681,15 @@ struct ScenarioEditorView: View {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if names.contains(where: \.isEmpty) {
-            return "Every scenario needs a name."
+            return "Every Cue needs a name."
         }
         if Set(names.map { $0.lowercased() }).count != names.count {
-            return "Scenario names must be unique."
+            return "Cue names must be unique."
         }
         if scenarios.contains(where: {
             $0.windows.count < 2 || $0.windows.count > 8
         }) {
-            return "Each scenario needs between 2 and 8 windows."
+            return "Each Cue needs between 2 and 8 windows."
         }
         if scenarios.flatMap(\.windows).contains(where: {
             $0.target.kind == .application
@@ -686,11 +728,11 @@ struct ScenarioEditorView: View {
 
     private func addScenario() {
         var number = scenarios.count + 1
-        var name = "New Scenario \(number)"
+        var name = "New Cue \(number)"
         let usedNames = Set(scenarios.map { $0.name.lowercased() })
         while usedNames.contains(name.lowercased()) {
             number += 1
-            name = "New Scenario \(number)"
+            name = "New Cue \(number)"
         }
 
         let targets: [ScenarioWindowTarget]
@@ -811,6 +853,122 @@ struct ScenarioEditorView: View {
         ].id
     }
 
+    private func importCues() {
+        let panel = NSOpenPanel()
+        panel.title = "Import PaneCue Cues"
+        panel.prompt = "Import"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.json]
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        do {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            guard (values.fileSize ?? 0) <= 2_000_000 else {
+                throw CueTransferError.fileTooLarge
+            }
+            let archive = try CueArchive.decode(Data(contentsOf: url))
+            var adjustedCount = 0
+            var imported: [CustomScenario] = []
+
+            for cue in archive.cues {
+                var copy = cue
+                copy.id = UUID()
+                copy.name = uniqueName(base: cue.name)
+                if !PaneCueReleaseProfile.current.isExperimental {
+                    copy.conditions = ScenarioConditions()
+                }
+                copy.windows = cue.windows.map { window in
+                    var copy = window
+                    copy.id = UUID()
+                    return copy
+                }
+
+                let phrases = Set(
+                    scenarios.map {
+                        $0.voicePhrase.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).lowercased()
+                    }.filter { !$0.isEmpty }
+                )
+                let importedPhrase = copy.voicePhrase.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).lowercased()
+                if !importedPhrase.isEmpty,
+                   phrases.contains(importedPhrase) {
+                    copy.voicePhrase = ""
+                    adjustedCount += 1
+                }
+
+                let hotKeys = Set(
+                    scenarios.map(\.hotKey)
+                        .filter(\.isEnabled)
+                        .map(\.displayName)
+                )
+                if copy.hotKey.isEnabled,
+                   hotKeys.contains(copy.hotKey.displayName) {
+                    copy.hotKey = ScenarioHotKey()
+                    adjustedCount += 1
+                }
+
+                scenarios.append(copy)
+                imported.append(copy)
+            }
+
+            selectedID = imported.first?.id
+            selectedWindowID = imported.first?.windows.first?.id
+            transferError = nil
+            transferMessage = "Imported \(imported.count) Cue\(imported.count == 1 ? "" : "s") · press Save Cues"
+            if adjustedCount > 0 {
+                transferMessage += " · conflicting activations were disabled"
+            }
+        } catch {
+            transferError = error.localizedDescription
+        }
+    }
+
+    private func exportSelectedCue() {
+        guard let selectedIndex else {
+            return
+        }
+        let cue = scenarios[selectedIndex]
+        let panel = NSSavePanel()
+        panel.title = "Export PaneCue Cue"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue =
+            sanitizedFileName(cue.name) + ".panecuecue.json"
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        do {
+            let data = try CueArchive(cues: [cue]).encodedData()
+            try data.write(to: url, options: .atomic)
+            transferError = nil
+            transferMessage = "Exported “\(cue.name)”"
+        } catch {
+            transferError = error.localizedDescription
+        }
+    }
+
+    private func sanitizedFileName(_ value: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:\\")
+            .union(.controlCharacters)
+        let components = value.components(separatedBy: invalid)
+            .filter { !$0.isEmpty }
+        let result = components.joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? "PaneCue-Cue" : result
+    }
+
     private static func isValidWebURL(_ value: String) -> Bool {
         let candidate = value.contains("://")
             ? value
@@ -822,6 +980,17 @@ struct ScenarioEditorView: View {
             return false
         }
         return url.host != nil
+    }
+}
+
+private enum CueTransferError: LocalizedError {
+    case fileTooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .fileTooLarge:
+            return "The selected Cue file is larger than 2 MB."
+        }
     }
 }
 

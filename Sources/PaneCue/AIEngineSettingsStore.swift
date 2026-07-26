@@ -29,12 +29,17 @@ final class AIEngineSettingsStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        processingMode = AIProcessingMode(
-            rawValue: defaults.string(forKey: Keys.processingMode) ?? ""
-        ) ?? .automatic
-        localCommandModel = LocalCommandModel(
-            rawValue: defaults.string(forKey: Keys.localCommandModel) ?? ""
-        ) ?? .smart
+        if PaneCueReleaseProfile.current.isExperimental {
+            processingMode = AIProcessingMode(
+                rawValue: defaults.string(forKey: Keys.processingMode) ?? ""
+            ) ?? .automatic
+            localCommandModel = LocalCommandModel(
+                rawValue: defaults.string(forKey: Keys.localCommandModel) ?? ""
+            ) ?? .smart
+        } else {
+            processingMode = .offline
+            localCommandModel = .smart
+        }
     }
 
     private enum Keys {

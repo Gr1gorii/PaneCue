@@ -3,7 +3,22 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="${PROJECT_DIR}/build/PaneCue.app"
+PROFILE="main"
+APP_NAME="PaneCue"
+INFO_PLIST="${PROJECT_DIR}/Resources/Info.plist"
+BUNDLE_ID="io.github.gr1gorii.PaneCue"
+
+if [[ "${1:-}" == "--experimental" ]]; then
+    PROFILE="experimental"
+    APP_NAME="PaneCue Experimental"
+    INFO_PLIST="${PROJECT_DIR}/Resources/Info-Experimental.plist"
+    BUNDLE_ID="io.github.gr1gorii.PaneCue.experimental"
+elif [[ -n "${1:-}" ]]; then
+    echo "usage: $0 [--experimental]" >&2
+    exit 64
+fi
+
+APP_DIR="${PROJECT_DIR}/build/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
@@ -12,9 +27,10 @@ MODELS_DIR="${RESOURCES_DIR}/Models"
 
 swift build --package-path "${PROJECT_DIR}" -c release
 
+rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RUNTIME_DIR}" "${MODELS_DIR}"
 cp -f "${PROJECT_DIR}/.build/release/PaneCue" "${MACOS_DIR}/PaneCue"
-cp -f "${PROJECT_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
+cp -f "${INFO_PLIST}" "${CONTENTS_DIR}/Info.plist"
 cp -f "${PROJECT_DIR}/Resources/PaneCue.icns" \
     "${RESOURCES_DIR}/PaneCue.icns"
 cp -f "${PROJECT_DIR}/Resources/AppIcon.png" \
@@ -48,7 +64,7 @@ codesign \
     --force \
     --deep \
     --sign - \
-    --requirements '=designated => identifier "io.github.gr1gorii.PaneCue"' \
+    --requirements "=designated => identifier \"${BUNDLE_ID}\"" \
     "${APP_DIR}" >/dev/null
 
-echo "${APP_DIR}"
+echo "${APP_DIR} (${PROFILE})"
