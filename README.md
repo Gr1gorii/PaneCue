@@ -127,6 +127,11 @@ Before publishing a v0.1 candidate, run the complete automated gate:
 ./scripts/run_v01_acceptance.sh
 ```
 
+Release engineering is documented in
+[the v0.1 release guide](docs/release/v0.1-release.md). A local DMG can be
+created with `./scripts/build_release_dmg.sh --adhoc`; public artifacts require
+a Developer ID Application certificate and successful Apple notarization.
+
 To build the separate experimental app:
 
 ```sh

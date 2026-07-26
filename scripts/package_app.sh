@@ -7,16 +7,42 @@ PROFILE="main"
 APP_NAME="PaneCue"
 INFO_PLIST="${PROJECT_DIR}/Resources/Info.plist"
 BUNDLE_ID="io.github.gr1gorii.PaneCue"
+ENTITLEMENTS="${PROJECT_DIR}/Resources/PaneCue.entitlements"
+SIGN_IDENTITY="${PANECUE_CODESIGN_IDENTITY:--}"
 
-if [[ "${1:-}" == "--experimental" ]]; then
-    PROFILE="experimental"
-    APP_NAME="PaneCue Experimental"
-    INFO_PLIST="${PROJECT_DIR}/Resources/Info-Experimental.plist"
-    BUNDLE_ID="io.github.gr1gorii.PaneCue.experimental"
-elif [[ -n "${1:-}" ]]; then
-    echo "usage: $0 [--experimental]" >&2
-    exit 64
-fi
+usage() {
+    cat <<'EOF'
+usage: package_app.sh [--experimental] [--sign-identity IDENTITY]
+
+Without --sign-identity, the app receives an ad-hoc signature for local use.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --experimental)
+            PROFILE="experimental"
+            APP_NAME="PaneCue Experimental"
+            INFO_PLIST="${PROJECT_DIR}/Resources/Info-Experimental.plist"
+            BUNDLE_ID="io.github.gr1gorii.PaneCue.experimental"
+            ENTITLEMENTS="${PROJECT_DIR}/Resources/PaneCue-Experimental.entitlements"
+            shift
+            ;;
+        --sign-identity)
+            [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+            SIGN_IDENTITY="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 64
+            ;;
+    esac
+done
 
 APP_DIR="${PROJECT_DIR}/build/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
@@ -60,11 +86,26 @@ else
     exit 1
 fi
 
-codesign \
-    --force \
-    --deep \
-    --sign - \
-    --requirements "=designated => identifier \"${BUNDLE_ID}\"" \
-    "${APP_DIR}" >/dev/null
+SIGN_ARGUMENTS=(
+    --force
+    --deep
+    --sign "${SIGN_IDENTITY}"
+    --entitlements "${ENTITLEMENTS}"
+)
 
-echo "${APP_DIR} (${PROFILE})"
+if [[ "${SIGN_IDENTITY}" != "-" ]]; then
+    SIGN_ARGUMENTS+=(--options runtime --timestamp)
+else
+    SIGN_ARGUMENTS+=(
+        --requirements "=designated => identifier \"${BUNDLE_ID}\""
+    )
+fi
+
+codesign "${SIGN_ARGUMENTS[@]}" "${APP_DIR}" >/dev/null
+codesign --verify --deep --strict "${APP_DIR}"
+
+if [[ "${SIGN_IDENTITY}" == "-" ]]; then
+    echo "${APP_DIR} (${PROFILE}, ad-hoc signed)"
+else
+    echo "${APP_DIR} (${PROFILE}, signed by ${SIGN_IDENTITY})"
+fi
