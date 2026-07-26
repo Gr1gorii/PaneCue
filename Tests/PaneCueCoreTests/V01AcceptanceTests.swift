@@ -39,10 +39,12 @@ struct V01AcceptanceTests {
         #expect(plan.windows[0].gridRect.height == 1)
         #expect(abs(plan.windows[1].gridRect.x - 2.0 / 3.0) < 0.000_001)
         #expect(plan.windows[1].gridRect.y == 0)
-        #expect(plan.windows[1].gridRect.height == 0.5)
+        #expect(abs(plan.windows[1].gridRect.width - 1.0 / 3.0) < 0.000_001)
+        #expect(plan.windows[1].gridRect.height == 0.75)
         #expect(abs(plan.windows[2].gridRect.x - 2.0 / 3.0) < 0.000_001)
-        #expect(plan.windows[2].gridRect.y == 0.5)
-        #expect(plan.windows[2].gridRect.height == 0.5)
+        #expect(plan.windows[2].gridRect.y == 0.75)
+        #expect(abs(plan.windows[2].gridRect.width - 1.0 / 3.0) < 0.000_001)
+        #expect(plan.windows[2].gridRect.height == 0.25)
     }
 
     @Test

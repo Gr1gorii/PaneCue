@@ -48,7 +48,75 @@ public enum WorkspacePlanCommandInterpreter {
            let plan = WorkspacePlan.from(intent: intent) {
             return plan
         }
+        if targets.count == 3,
+           let hints = DynamicWorkspaceCommandParser
+               .threeWindowLayoutHints(in: transcript) {
+            return threeWindowPlan(
+                targets: targets,
+                hints: hints
+            )
+        }
         return WorkspacePlan.tiled(targets: targets)
+    }
+
+    private static func threeWindowPlan(
+        targets: [ScenarioWindowTarget],
+        hints: DynamicWorkspaceCommandParser.ThreeWindowLayoutHints
+    ) -> WorkspacePlan {
+        let supportingIndex = targets.indices.first {
+            $0 != hints.dominantIndex && $0 != hints.compactIndex
+        } ?? 1
+        let orderedTargets = [
+            targets[hints.dominantIndex],
+            targets[supportingIndex],
+            targets[hints.compactIndex]
+        ]
+        // Keep the secondary column wide enough for the macOS Notes window.
+        // A 75/25 split looks plausible in Preview but Notes constrains it on
+        // real hardware, so a three-window layout caps the dominant column at
+        // two thirds and expresses "small" through the vertical split.
+        let dominantRatio = min(
+            max(hints.dominantRatio, 0.6),
+            2.0 / 3.0
+        )
+        let secondaryWidth = 1 - dominantRatio
+        let compactHeight = 0.25
+        let supportingHeight = 1 - compactHeight
+        let dominantX = hints.dominantLeads ? 0.0 : secondaryWidth
+        let secondaryX = hints.dominantLeads ? dominantRatio : 0.0
+        let compactY = hints.compactPlacement == .top
+            ? 0.0
+            : supportingHeight
+        let supportingY = hints.compactPlacement == .top
+            ? compactHeight
+            : 0.0
+        let rects = [
+            ScenarioGridRect(
+                x: dominantX,
+                y: 0,
+                width: dominantRatio,
+                height: 1
+            ),
+            ScenarioGridRect(
+                x: secondaryX,
+                y: supportingY,
+                width: secondaryWidth,
+                height: supportingHeight
+            ),
+            ScenarioGridRect(
+                x: secondaryX,
+                y: compactY,
+                width: secondaryWidth,
+                height: compactHeight
+            )
+        ]
+        let slots = zip(orderedTargets, rects).map { target, rect in
+            ScenarioWindowSlot(target: target, gridRect: rect)
+        }
+        return WorkspacePlan(
+            windows: slots,
+            selectedWindowID: slots.last?.id
+        )
     }
 
     public static func interpret(

@@ -17,6 +17,19 @@ public enum DynamicWorkspaceArgument {
 /// request. It intentionally handles slots deterministically so PaneCue never
 /// invents an application or an unsafe action.
 public enum DynamicWorkspaceCommandParser {
+    enum CompactVerticalPlacement: Sendable {
+        case top
+        case bottom
+    }
+
+    struct ThreeWindowLayoutHints: Sendable {
+        var dominantIndex: Int
+        var compactIndex: Int
+        var dominantRatio: Double
+        var dominantLeads: Bool
+        var compactPlacement: CompactVerticalPlacement
+    }
+
     private struct Target: Equatable {
         var kind: String
         var value: String
@@ -229,6 +242,123 @@ public enum DynamicWorkspaceCommandParser {
                 )
             )
         }
+    }
+
+    static func threeWindowLayoutHints(
+        in transcript: String
+    ) -> ThreeWindowLayoutHints? {
+        let text = normalize(transcript)
+        let targets = matchedTargets(in: text)
+        guard targets.count == 3 else {
+            return nil
+        }
+
+        let smallerLocation = markerLocation(
+            in: text,
+            markers: [
+                "чуть поменьше",
+                "поменьше",
+                "намного меньше",
+                "маленьк",
+                "компактн",
+                "вспомогательн",
+                "узк",
+                "уже",
+                "a little smaller",
+                "smaller",
+                "small",
+                "compact",
+                "secondary",
+                "narrow"
+            ]
+        )
+        let largerLocation = markerLocation(
+            in: text,
+            markers: [
+                "больш",
+                "побольше",
+                "намного больше",
+                "главн",
+                "основн",
+                "на весь экран",
+                "шире",
+                "две трети",
+                "70 на 30",
+                "70 30",
+                "larger",
+                "large",
+                "main",
+                "primary",
+                "full screen"
+            ]
+        )
+        guard smallerLocation != nil || largerLocation != nil else {
+            return nil
+        }
+
+        let compactIndex = smallerLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        } ?? 2
+        let dominantIndex = largerLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        } ?? targets.indices.first(where: { $0 != compactIndex }) ?? 0
+        guard compactIndex != dominantIndex else {
+            return nil
+        }
+
+        let topLocation = markerLocation(
+            in: text,
+            markers: ["сверху", "наверху", "top", "above"]
+        )
+        let bottomLocation = markerLocation(
+            in: text,
+            markers: ["снизу", "внизу", "bottom", "below"]
+        )
+        let topTargetIndex = topLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        }
+        let bottomTargetIndex = bottomLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        }
+        let compactPlacement: CompactVerticalPlacement
+        if bottomTargetIndex == compactIndex {
+            compactPlacement = .bottom
+        } else if topTargetIndex == compactIndex {
+            compactPlacement = .top
+        } else {
+            compactPlacement = .bottom
+        }
+
+        let leftLocation = markerLocation(
+            in: text,
+            markers: ["слева", "налево", "left"]
+        )
+        let rightLocation = markerLocation(
+            in: text,
+            markers: ["справа", "направо", "right"]
+        )
+        let leftTargetIndex = leftLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        }
+        let rightTargetIndex = rightLocation.map {
+            nearestTarget(to: $0, targets: targets)
+        }
+        let dominantLeads: Bool
+        if rightTargetIndex == dominantIndex {
+            dominantLeads = false
+        } else if leftTargetIndex == dominantIndex {
+            dominantLeads = true
+        } else {
+            dominantLeads = true
+        }
+
+        return ThreeWindowLayoutHints(
+            dominantIndex: dominantIndex,
+            compactIndex: compactIndex,
+            dominantRatio: requestedRatio(in: text),
+            dominantLeads: dominantLeads,
+            compactPlacement: compactPlacement
+        )
     }
 
     public static func intent(from transcript: String) -> VoiceCommandIntent? {
