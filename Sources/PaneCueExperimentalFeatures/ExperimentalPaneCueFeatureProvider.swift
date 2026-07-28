@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import PaneCueApp
@@ -13,6 +14,7 @@ private enum ExperimentalFeatureProviderError: LocalizedError {
 
 @MainActor
 public final class ExperimentalPaneCueFeatureProvider:
+    NSObject,
     PaneCueFeatureProvider
 {
     private let keyStore = OpenAIAPIKeyStore()
@@ -27,8 +29,13 @@ public final class ExperimentalPaneCueFeatureProvider:
     private var voiceCommand: RealtimeVoiceCommandController?
     private var autoMode: AutoModeController?
     private var didShutdown = false
+    private var apiKeyStatusItem: NSMenuItem?
+    private var voiceCommandItem: NSMenuItem?
+    private var autoModeItem: NSMenuItem?
 
-    public init() {}
+    public override init() {
+        super.init()
+    }
 
     public let isExperimental = true
     public let displayName = "PaneCue Experimental"
@@ -95,6 +102,90 @@ public final class ExperimentalPaneCueFeatureProvider:
 
     public func start() {
         autoMode?.start()
+    }
+
+    public func installStatusMenuItems(in menu: NSMenu) {
+        guard apiKeyStatusItem == nil else {
+            return
+        }
+
+        let keyStatus = NSMenuItem(
+            title: "Voice: checking configuration…",
+            action: nil,
+            keyEquivalent: ""
+        )
+        keyStatus.isEnabled = false
+        apiKeyStatusItem = keyStatus
+
+        let keyItem = menuItem(
+            title: "OpenAI API Key…",
+            action: #selector(configureCloudAccessFromMenu)
+        )
+        let voiceItem = menuItem(
+            title: "Start Voice Command (⌥ Space)",
+            action: #selector(toggleVoiceCommandFromMenu)
+        )
+        voiceCommandItem = voiceItem
+        let suggestionsItem = menuItem(
+            title: "Suggestions Beta",
+            action: #selector(toggleAutoModeFromMenu)
+        )
+        autoModeItem = suggestionsItem
+
+        menu.addItem(keyStatus)
+        menu.addItem(keyItem)
+        menu.addItem(.separator())
+        menu.addItem(voiceItem)
+        menu.addItem(suggestionsItem)
+        menu.addItem(.separator())
+        menu.addItem(
+            menuItem(
+                title: "Code + Call",
+                action: #selector(applyCodeAndCallFromMenu),
+                keyEquivalent: "1"
+            )
+        )
+        menu.addItem(
+            menuItem(
+                title: "Documentation + Code",
+                action: #selector(applyDocumentationAndCodeFromMenu),
+                keyEquivalent: "2"
+            )
+        )
+        menu.addItem(
+            menuItem(
+                title: "Notes + Browser",
+                action: #selector(applyNotesAndBrowserFromMenu),
+                keyEquivalent: "3"
+            )
+        )
+        menu.addItem(
+            menuItem(
+                title: "Browser Video",
+                action: #selector(showBrowserVideoFromMenu),
+                keyEquivalent: "4"
+            )
+        )
+        refreshStatusMenuItems()
+    }
+
+    public func refreshStatusMenuItems() {
+        apiKeyStatusItem?.title = hasAPIKey
+            ? "Voice: OpenAI key is in Keychain"
+            : "Voice: OpenAI key is not configured"
+        autoModeItem?.state = isAutoModeEnabled ? .on : .off
+
+        switch voiceState {
+        case .idle:
+            voiceCommandItem?.title = "Start Voice Command (⌥ Space)"
+            voiceCommandItem?.isEnabled = true
+        case .listening:
+            voiceCommandItem?.title = "Stop and Run Voice Command (⌥ Space)"
+            voiceCommandItem?.isEnabled = true
+        case .processing:
+            voiceCommandItem?.title = "Voice Command Is Processing…"
+            voiceCommandItem?.isEnabled = false
+        }
     }
 
     public func processingModeDidChange(_ mode: AIProcessingMode) {
@@ -217,5 +308,55 @@ public final class ExperimentalPaneCueFeatureProvider:
         voiceCommand?.cancel()
         await offlinePack.shutdown()
         await callVideoPreview.stopCapture()
+    }
+
+    private func menuItem(
+        title: String,
+        action: Selector,
+        keyEquivalent: String = ""
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: title,
+            action: action,
+            keyEquivalent: keyEquivalent
+        )
+        item.target = self
+        return item
+    }
+
+    @objc
+    private func configureCloudAccessFromMenu() {
+        context?.configureCloudAccess()
+    }
+
+    @objc
+    private func toggleVoiceCommandFromMenu() {
+        context?.toggleVoiceCommand()
+    }
+
+    @objc
+    private func toggleAutoModeFromMenu() {
+        toggleAutoMode()
+        context?.stateDidChange(nil)
+    }
+
+    @objc
+    private func applyCodeAndCallFromMenu() {
+        context?.runFeatureAction(.applyCodeAndCall)
+    }
+
+    @objc
+    private func applyDocumentationAndCodeFromMenu() {
+        context?.runFeatureAction(.applyDocumentationAndCode)
+    }
+
+    @objc
+    private func applyNotesAndBrowserFromMenu() {
+        context?.runFeatureAction(.applyNotesAndBrowser)
+    }
+
+    @objc
+    private func showBrowserVideoFromMenu() {
+        context?.runFeatureAction(.showBrowserVideo)
     }
 }

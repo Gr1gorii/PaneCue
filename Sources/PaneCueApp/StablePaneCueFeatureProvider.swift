@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PaneCueCore
 
@@ -29,6 +30,8 @@ public final class StablePaneCueFeatureProvider: PaneCueFeatureProvider {
 
     public func configure(context: PaneCueFeatureProviderContext) {}
     public func start() {}
+    public func installStatusMenuItems(in menu: NSMenu) {}
+    public func refreshStatusMenuItems() {}
     public func processingModeDidChange(_ mode: AIProcessingMode) {}
     public func connectivityDidChange(isOnline: Bool) {}
 

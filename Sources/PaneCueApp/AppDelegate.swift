@@ -178,9 +178,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var statusLineItem: NSMenuItem!
     private var accessibilityItem: NSMenuItem!
-    private var apiKeyStatusItem: NSMenuItem!
-    private var voiceCommandItem: NSMenuItem!
-    private var autoModeItem: NSMenuItem!
     private var restoreItem: NSMenuItem!
     private var customScenariosMenu: NSMenu!
     private var globalHotKey: GlobalHotKeyController?
@@ -225,6 +222,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 },
                 stateDidChange: { [weak self] message in
                     self?.updateMenuState(message: message)
+                },
+                runFeatureAction: { [weak self] action in
+                    self?.runBuiltInFromDashboard(action)
+                },
+                toggleVoiceCommand: { [weak self] in
+                    self?.toggleVoiceCommand()
+                },
+                configureCloudAccess: { [weak self] in
+                    self?.configureCloudAccess()
                 }
             )
         )
@@ -440,74 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accessibilityItem.target = self
         menu.addItem(accessibilityItem)
 
-        apiKeyStatusItem = NSMenuItem(
-            title: "Voice: checking configuration…",
-            action: nil,
-            keyEquivalent: ""
-        )
-        apiKeyStatusItem.isEnabled = false
-
-        let apiKeyItem = NSMenuItem(
-            title: "OpenAI API Key…",
-            action: #selector(configureCloudAccess),
-            keyEquivalent: ""
-        )
-        apiKeyItem.target = self
-
-        voiceCommandItem = NSMenuItem(
-            title: "Start Voice Command (⌥ Space)",
-            action: #selector(toggleVoiceCommand),
-            keyEquivalent: ""
-        )
-        voiceCommandItem.target = self
-
-        autoModeItem = NSMenuItem(
-            title: "Suggestions Beta",
-            action: #selector(toggleAutoMode),
-            keyEquivalent: ""
-        )
-        autoModeItem.target = self
-
-        let codeAndCallItem = NSMenuItem(
-            title: "Code + Call",
-            action: #selector(applyCodeAndCall),
-            keyEquivalent: "1"
-        )
-        codeAndCallItem.target = self
-
-        let documentationAndCodeItem = NSMenuItem(
-            title: "Documentation + Code",
-            action: #selector(applyDocumentationAndCode),
-            keyEquivalent: "2"
-        )
-        documentationAndCodeItem.target = self
-
-        let notesAndBrowserItem = NSMenuItem(
-            title: "Notes + Browser",
-            action: #selector(applyNotesAndBrowser),
-            keyEquivalent: "3"
-        )
-        notesAndBrowserItem.target = self
-
-        let browserVideoItem = NSMenuItem(
-            title: "Browser Video",
-            action: #selector(showBrowserVideo),
-            keyEquivalent: "4"
-        )
-        browserVideoItem.target = self
-
-        if featureProvider.isExperimental {
-            menu.addItem(apiKeyStatusItem)
-            menu.addItem(apiKeyItem)
-            menu.addItem(.separator())
-            menu.addItem(voiceCommandItem)
-            menu.addItem(autoModeItem)
-            menu.addItem(.separator())
-            menu.addItem(codeAndCallItem)
-            menu.addItem(documentationAndCodeItem)
-            menu.addItem(notesAndBrowserItem)
-            menu.addItem(browserVideoItem)
-        }
+        featureProvider.installStatusMenuItems(in: menu)
 
         customScenariosMenu = NSMenu(title: "Cues")
         let customScenariosItem = NSMenuItem(
@@ -588,8 +527,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch featureProvider.voiceState {
         case .idle:
             voiceStateMessage = nil
-            voiceCommandItem.title = "Start Voice Command (⌥ Space)"
-            voiceCommandItem.isEnabled = true
             statusItem.button?.image = PaneCueBrandAssets.statusIcon
                 ?? NSImage(
                     systemSymbolName: "rectangle.split.2x1",
@@ -597,16 +534,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
         case .listening:
             voiceStateMessage = "Listening for a voice command…"
-            voiceCommandItem.title = "Stop and Run Voice Command (⌥ Space)"
-            voiceCommandItem.isEnabled = true
             statusItem.button?.image = NSImage(
                 systemSymbolName: "mic.fill",
                 accessibilityDescription: "PaneCue is listening"
             )
         case .processing:
             voiceStateMessage = "Choosing a window scenario…"
-            voiceCommandItem.title = "Voice Command Is Processing…"
-            voiceCommandItem.isEnabled = false
             statusItem.button?.image = NSImage(
                 systemSymbolName: "waveform",
                 accessibilityDescription: "PaneCue is processing a voice command"
@@ -629,15 +562,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : "Accessibility access is required"
             )
         accessibilityItem.isHidden = trusted
+        featureProvider.refreshStatusMenuItems()
         let suggestionsEnabled = featureProvider.isExperimental
             ? featureProvider.isAutoModeEnabled
             : false
-        autoModeItem.state = suggestionsEnabled ? .on : .off
-        if featureProvider.isExperimental {
-            apiKeyStatusItem.title = featureProvider.hasAPIKey
-                ? "Voice: OpenAI key is in Keychain"
-                : "Voice: OpenAI key is not configured"
-        }
         restoreItem.isEnabled = windowManager.canRestore
             || (
                 featureProvider.isExperimental
@@ -840,7 +768,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    @objc
     private func configureCloudAccess() {
         guard featureProvider.isExperimental else {
             return
@@ -856,14 +783,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             presentError(error)
         }
-    }
-
-    @objc
-    private func toggleAutoMode() {
-        guard featureProvider.isExperimental else {
-            return
-        }
-        featureProvider.toggleAutoMode()
     }
 
     private func presentAutoModeSuggestion(
@@ -900,7 +819,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         featureProvider.pauseAutoMode(for: 60)
     }
 
-    @objc
     private func toggleVoiceCommand() {
         guard featureProvider.isExperimental else {
             mainWindow.show(section: .arrange)
@@ -1027,7 +945,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc
     private func applyDocumentationAndCode() {
         beginUserInitiatedScenario()
         Task { @MainActor in
@@ -1044,7 +961,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc
     private func applyNotesAndBrowser() {
         beginUserInitiatedScenario()
         Task { @MainActor in
@@ -1061,7 +977,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc
     private func applyCodeAndCall() {
         guard featureProvider.isExperimental else {
             return
@@ -1083,7 +998,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc
     private func showBrowserVideo() {
         guard featureProvider.isExperimental else {
             return
