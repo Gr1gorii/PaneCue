@@ -4,10 +4,10 @@ import Network
 import PaneCueCore
 
 @MainActor
-final class ConnectivityMonitor: ObservableObject {
-    @Published private(set) var isOnline = true
+public final class ConnectivityMonitor: ObservableObject {
+    @Published public private(set) var isOnline = true
 
-    var statusDidChange: ((Bool) -> Void)?
+    public var statusDidChange: ((Bool) -> Void)?
 
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(
@@ -15,7 +15,7 @@ final class ConnectivityMonitor: ObservableObject {
         qos: .utility
     )
 
-    init() {
+    public init() {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
                 guard let self else {

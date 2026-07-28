@@ -1,0 +1,5 @@
+import PaneCueApp
+import PaneCueExperimentalFeatures
+
+PaneCueExperimentalFeatureSet.prepareForLaunch()
+runPaneCueApplication()

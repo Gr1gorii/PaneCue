@@ -15,7 +15,7 @@ enum MicrophoneRecorderError: LocalizedError {
     }
 }
 
-final class MicrophoneRecorder: @unchecked Sendable {
+public final class MicrophoneRecorder: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let lock = NSLock()
     private var capturedPCM16 = Data()
@@ -23,7 +23,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
     private var outputFormat: AVAudioFormat?
     private var isTapInstalled = false
 
-    func start() throws {
+    public init() {}
+
+    public func start() throws {
         if engine.isRunning {
             _ = stop()
         }
@@ -73,7 +75,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
         }
     }
 
-    func stop() -> Data {
+    public func stop() -> Data {
         if engine.isRunning {
             engine.stop()
         }

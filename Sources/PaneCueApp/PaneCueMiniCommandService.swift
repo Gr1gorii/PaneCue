@@ -1,11 +1,11 @@
 import Foundation
 import PaneCueCore
 
-enum PaneCueMiniCommandError: LocalizedError {
+public enum PaneCueMiniCommandError: LocalizedError {
     case modelUnavailable
     case modelReturnedNoAction
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .modelUnavailable:
             return "PaneCue Mini is missing from this app build."
@@ -15,14 +15,16 @@ enum PaneCueMiniCommandError: LocalizedError {
     }
 }
 
-actor PaneCueMiniCommandService {
+public actor PaneCueMiniCommandService {
     private var loadedModel: PaneCueMiniModel?
 
-    var isAvailable: Bool {
+    public init() {}
+
+    public var isAvailable: Bool {
         modelURL != nil
     }
 
-    func intent(
+    public func intent(
         transcript: String,
         scenarios: [VoiceScenarioReference]
     ) throws -> VoiceCommandIntent {
@@ -49,7 +51,7 @@ actor PaneCueMiniCommandService {
         return intent
     }
 
-    func unload() {
+    public func unload() {
         loadedModel = nil
     }
 

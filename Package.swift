@@ -8,19 +8,45 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "PaneCue", targets: ["PaneCue"])
+        .executable(name: "PaneCue", targets: ["PaneCue"]),
+        .executable(
+            name: "PaneCueExperimental",
+            targets: ["PaneCueExperimental"]
+        )
     ],
     targets: [
         .target(
             name: "PaneCueCore"
         ),
+        .target(
+            name: "PaneCueApp",
+            dependencies: ["PaneCueCore"]
+        ),
         .executableTarget(
             name: "PaneCue",
-            dependencies: ["PaneCueCore"]
+            dependencies: ["PaneCueApp"]
+        ),
+        .target(
+            name: "PaneCueExperimentalFeatures",
+            dependencies: ["PaneCueCore", "PaneCueApp"]
+        ),
+        .executableTarget(
+            name: "PaneCueExperimental",
+            dependencies: [
+                "PaneCueApp",
+                "PaneCueExperimentalFeatures"
+            ]
         ),
         .testTarget(
             name: "PaneCueCoreTests",
             dependencies: ["PaneCueCore"]
+        ),
+        .testTarget(
+            name: "PaneCueTargetStructureTests",
+            dependencies: [
+                "PaneCueApp",
+                "PaneCueExperimentalFeatures"
+            ]
         )
     ]
 )

@@ -26,8 +26,10 @@ enum OnDeviceSpeechRecognizerError: LocalizedError {
 }
 
 @MainActor
-final class OnDeviceSpeechRecognizer {
-    func prepare() async throws {
+public final class OnDeviceSpeechRecognizer {
+    public init() {}
+
+    public func prepare() async throws {
         let authorized: Bool
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized:
@@ -52,7 +54,7 @@ final class OnDeviceSpeechRecognizer {
         }
     }
 
-    func transcriptions(
+    public func transcriptions(
         audioPCM16: Data
     ) async throws -> [String] {
         guard !audioPCM16.isEmpty,
