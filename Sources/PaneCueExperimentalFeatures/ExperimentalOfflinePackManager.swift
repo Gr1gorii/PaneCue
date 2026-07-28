@@ -93,7 +93,7 @@ final class ExperimentalOfflinePackManager: ObservableObject {
     func unloadModels() {
         Task {
             await miniService.unload()
-            await service.unloadRunningModels()
+            await service.unloadOwnedModels()
         }
     }
 

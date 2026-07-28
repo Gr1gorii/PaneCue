@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let commandLab = CommandLabService()
     private let voiceHUD = VoiceCommandHUDController()
     private let appIconController = PaneCueAppIconController()
+    private let terminationCoordinator = PaneCueTerminationCoordinator()
     private lazy var mainWindow = MainWindowController(
         store: customScenarioStore,
         featureProvider: featureProvider,
@@ -260,6 +261,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         appIconController.stop()
+    }
+
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard !terminationCoordinator.isComplete else {
+            return .terminateNow
+        }
+
+        let request = terminationCoordinator.begin { [weak self] in
+            await self?.performTerminationCleanup()
+        }
+        if request.startedCleanup {
+            Task { @MainActor in
+                await request.task.value
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -1148,15 +1168,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func quit() {
-        Task { @MainActor in
-            featureProvider.hideAutoModeSuggestion()
-            featureProvider.cancelVoice()
-            commandLab.cancelListening()
-            voiceHUD.hide()
-            await offlinePack.shutdown()
-            await featureProvider.shutdown()
-            NSApp.terminate(nil)
-        }
+        NSApp.terminate(nil)
+    }
+
+    private func performTerminationCleanup() async {
+        featureProvider.hideAutoModeSuggestion()
+        featureProvider.cancelVoice()
+        commandLab.cancelListening()
+        voiceHUD.hide()
+        await offlinePack.shutdown()
+        await featureProvider.shutdown()
+        appIconController.stop()
     }
 
     private func presentError(_ error: Error) {
