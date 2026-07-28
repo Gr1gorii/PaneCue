@@ -5,9 +5,8 @@ import PaneCueCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private let featureProvider: any PaneCueFeatureProvider
     private let windowManager = WindowManager()
-    private let callVideoPreview = CallVideoPreviewController()
-    private let apiKeyStore = OpenAIAPIKeyStore()
     private let customScenarioStore = CustomScenarioStore()
     private let applicationLauncher = ScenarioApplicationLauncher()
     private let aiSettings = AIEngineSettingsStore()
@@ -16,40 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let commandLab = CommandLabService()
     private let voiceHUD = VoiceCommandHUDController()
     private let appIconController = PaneCueAppIconController()
-    private let autoModeSuggestionPanel =
-        AutoModeSuggestionPanelController()
-    private lazy var apiKeySettings = OpenAIAPIKeySettingsController(
-        keyStore: apiKeyStore
-    )
-    private lazy var voiceCommand = RealtimeVoiceCommandController(
-        keyStore: apiKeyStore,
-        settings: aiSettings,
-        connectivity: connectivity,
-        offlinePack: offlinePack
-    )
-    private lazy var autoMode = AutoModeController(
-        windowManager: windowManager,
-        shouldPresentSuggestion: { [weak self] in
-            guard let self else {
-                return false
-            }
-            return voiceCommand.state == .idle
-                && !callVideoPreview.isCapturing
-                && windowManager.currentScenarioName == nil
-                && NSApp.modalWindow == nil
-                && !autoModeSuggestionPanel.isVisible
-        },
-        suggestionHandler: { [weak self] suggestion in
-            self?.presentAutoModeSuggestion(suggestion)
-        },
-        enabledDidChange: { [weak self] _ in
-            self?.autoModeSuggestionPanel.hide()
-            self?.updateMenuState()
-        }
-    )
     private lazy var mainWindow = MainWindowController(
         store: customScenarioStore,
-        keyStore: apiKeyStore,
+        featureProvider: featureProvider,
         aiSettings: aiSettings,
         connectivity: connectivity,
         offlinePack: offlinePack,
@@ -67,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.toggleVoiceCommand()
             },
             configureAPIKey: { [weak self] in
-                self?.configureOpenAIKey()
+                self?.configureCloudAccess()
             },
             requestAccessibility: { [weak self] in
                 self?.requestAccessibility()
@@ -85,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.openPrivacyPane(pane)
             },
             setAutoModeEnabled: { [weak self] enabled in
-                self?.autoMode.setEnabled(enabled)
+                self?.featureProvider.setAutoModeEnabled(enabled)
             },
             scenariosDidChange: { [weak self] in
                 self?.rebuildCustomScenariosMenu()
@@ -130,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 try ensureAccessibilityForApply()
                 beginUserInitiatedScenario()
-                await callVideoPreview.stopCapture()
+                await featureProvider.stopVideoCapture()
                 try await applicationLauncher.ensureApplications(
                     for: scenario
                 )
@@ -146,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 let summary = try await restoreWorkspace()
                 updateMenuState(message: summary)
-                autoMode.workspaceMayHaveChanged()
+                featureProvider.autoModeWorkspaceMayHaveChanged()
                 return summary
             },
             saveCommandCorrection: {
@@ -167,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else {
                     throw CommandLabError.unavailable
                 }
-                guard voiceCommand.state == .idle else {
+                guard featureProvider.voiceState == .idle else {
                     throw CommandLabError.unavailable
                 }
                 try await commandLab.startListening()
@@ -187,7 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 return PaneCueDiagnostics.report(
                     scenarios: customScenarioStore.scenarios,
-                    correctionCount: commandLab.correctionCount
+                    correctionCount: commandLab.correctionCount,
+                    features: featureProvider.diagnostics
                 )
             },
             resetPersonalization: { [weak self] in
@@ -195,8 +164,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return 0
                 }
                 let removedCount = commandLab.resetPersonalization()
-                if PaneCueReleaseProfile.current.isExperimental {
-                    autoMode.resetPersonalization()
+                if featureProvider.isExperimental {
+                    featureProvider.resetAutoModePersonalization()
                 }
                 updateMenuState(
                     message: "Personalization reset · \(removedCount) corrections removed"
@@ -216,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var globalHotKey: GlobalHotKeyController?
     private var customScenarioHotKeys: CustomScenarioHotKeyController?
 
+    init(featureProvider: any PaneCueFeatureProvider) {
+        self.featureProvider = featureProvider
+        super.init()
+    }
+
     private var voiceScenarioReferences: [VoiceScenarioReference] {
         customScenarioStore.scenarios.map { scenario in
             VoiceScenarioReference(
@@ -230,31 +204,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         appIconController.start()
-        if PaneCueReleaseProfile.current.isExperimental {
+        featureProvider.configure(
+            context: PaneCueFeatureProviderContext(
+                aiSettings: aiSettings,
+                connectivity: connectivity,
+                windowManager: windowManager,
+                shouldPresentSuggestion: { [weak self] in
+                    guard let self else {
+                        return false
+                    }
+                    return featureProvider.voiceState == .idle
+                        && !featureProvider.isVideoCaptureActive
+                        && windowManager.currentScenarioName == nil
+                        && NSApp.modalWindow == nil
+                        && !featureProvider.isSuggestionVisible
+                },
+                suggestionHandler: { [weak self] suggestion in
+                    self?.presentAutoModeSuggestion(suggestion)
+                },
+                stateDidChange: { [weak self] message in
+                    self?.updateMenuState(message: message)
+                }
+            )
+        )
+        if featureProvider.isExperimental {
             aiSettings.modeDidChange = { [weak self] mode in
                 guard let self else {
                     return
                 }
-                if mode == .cloud {
-                    offlinePack.unloadModels()
-                }
+                featureProvider.processingModeDidChange(mode)
                 updateMenuState(message: mode.detail)
             }
             connectivity.statusDidChange = { [weak self] online in
                 guard let self else {
                     return
                 }
-                if online, aiSettings.processingMode == .automatic {
-                    offlinePack.unloadModels()
-                }
+                featureProvider.connectivityDidChange(isOnline: online)
                 updateMenuState(
                     message: online
                         ? "Internet connection available"
                         : "PaneCue is ready to use the Offline Pack"
                 )
-            }
-            callVideoPreview.onUserClose = { [weak self] in
-                self?.updateMenuState(message: "Floating video closed")
             }
         } else {
             aiSettings.processingMode = .offline
@@ -264,9 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureStatusItem()
         configureGlobalHotKey()
         configureCustomScenarioHotKeys()
-        if PaneCueReleaseProfile.current.isExperimental {
-            autoMode.start()
-        }
+        featureProvider.start()
         mainWindow.show()
     }
 
@@ -441,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let apiKeyItem = NSMenuItem(
             title: "OpenAI API Key…",
-            action: #selector(configureOpenAIKey),
+            action: #selector(configureCloudAccess),
             keyEquivalent: ""
         )
         apiKeyItem.target = self
@@ -488,7 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         browserVideoItem.target = self
 
-        if PaneCueReleaseProfile.current.isExperimental {
+        if featureProvider.isExperimental {
             menu.addItem(apiKeyStatusItem)
             menu.addItem(apiKeyItem)
             menu.addItem(.separator())
@@ -577,7 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateMenuState(message: String? = nil) {
         let trusted = windowManager.hasAccessibilityPermission
         let voiceStateMessage: String?
-        switch voiceCommand.state {
+        switch featureProvider.voiceState {
         case .idle:
             voiceStateMessage = nil
             voiceCommandItem.title = "Start Voice Command (⌥ Space)"
@@ -612,8 +600,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     ? (
                         windowManager.currentScenarioName.map { "\($0) is active" }
                             ?? (
-                                PaneCueReleaseProfile.current.isExperimental
-                                    && callVideoPreview.isCapturing
+                                featureProvider.isExperimental
+                                    && featureProvider.isVideoCaptureActive
                                     ? "Floating video is active"
                                     : "Ready"
                             )
@@ -621,27 +609,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : "Accessibility access is required"
             )
         accessibilityItem.isHidden = trusted
-        let suggestionsEnabled =
-            PaneCueReleaseProfile.current.isExperimental
-                ? autoMode.isEnabled
-                : false
+        let suggestionsEnabled = featureProvider.isExperimental
+            ? featureProvider.isAutoModeEnabled
+            : false
         autoModeItem.state = suggestionsEnabled ? .on : .off
-        if PaneCueReleaseProfile.current.isExperimental {
-            apiKeyStatusItem.title = apiKeyStore.hasKey
+        if featureProvider.isExperimental {
+            apiKeyStatusItem.title = featureProvider.hasAPIKey
                 ? "Voice: OpenAI key is in Keychain"
                 : "Voice: OpenAI key is not configured"
         }
         restoreItem.isEnabled = windowManager.canRestore
             || (
-                PaneCueReleaseProfile.current.isExperimental
-                    && callVideoPreview.isCapturing
+                featureProvider.isExperimental
+                    && featureProvider.isVideoCaptureActive
             )
 
         mainWindow.update(
             PaneCueDashboardSnapshot(
                 statusMessage: statusLineItem.title,
                 activeScenarioName: windowManager.currentScenarioName,
-                voiceState: voiceCommand.state,
+                voiceState: featureProvider.voiceState,
                 canRestore: restoreItem.isEnabled,
                 isAutoModeEnabled: suggestionsEnabled
             )
@@ -655,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     guard let self else {
                         return
                     }
-                    if PaneCueReleaseProfile.current.isExperimental {
+                    if self.featureProvider.isExperimental {
                         self.toggleVoiceCommand()
                     } else {
                         self.mainWindow.show(section: .arrange)
@@ -695,28 +682,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func requestScreenRecordingAccess() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             return
         }
-        guard !CGPreflightScreenCaptureAccess() else {
-            updateMenuState(message: "Screen Recording access is enabled")
-            return
-        }
-
-        let defaults = UserDefaults.standard
-        let requestKey = "PaneCue.didRequestScreenRecordingPermission"
-        let hasRequested = defaults.bool(forKey: requestKey)
-        defaults.set(true, forKey: requestKey)
-
-        let granted = CGRequestScreenCaptureAccess()
         updateMenuState(
-            message: granted
-                ? "Screen Recording access is enabled"
-                : "Screen Recording access was not granted"
+            message: featureProvider.requestScreenRecordingAccess()
         )
-        if !granted, hasRequested {
-            openPrivacyPane(.screenRecording)
-        }
     }
 
     private func requestMicrophoneAccess() {
@@ -806,7 +777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func runBuiltInFromDashboard(
         _ action: VoiceCommandAction
     ) {
-        if !PaneCueReleaseProfile.current.isExperimental,
+        if !featureProvider.isExperimental,
            (
                action == .applyCodeAndCall
                    || action == .showBrowserVideo
@@ -850,17 +821,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc
-    private func configureOpenAIKey() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+    private func configureCloudAccess() {
+        guard featureProvider.isExperimental else {
             return
         }
-        if voiceCommand.state != .idle {
-            voiceCommand.cancel()
+        if featureProvider.voiceState != .idle {
+            featureProvider.cancelVoice()
             voiceHUD.hide()
         }
 
         do {
-            let message = try apiKeySettings.present()
+            let message = try featureProvider.configureAPIKey()
             updateMenuState(message: message)
         } catch {
             presentError(error)
@@ -869,22 +840,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func toggleAutoMode() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             return
         }
-        autoMode.toggle()
+        featureProvider.toggleAutoMode()
     }
 
     private func presentAutoModeSuggestion(
         _ suggestion: AutoModeSuggestion
     ) {
-        autoModeSuggestionPanel.show(
-            suggestion: suggestion,
+        featureProvider.presentAutoModeSuggestion(
+            suggestion,
             onApply: { [weak self] in
                 guard let self else {
                     return
                 }
-                autoMode.markApplied(suggestion)
                 updateMenuState(
                     message: "Suggestions Beta is applying \(suggestion.scenario.title)…"
                 )
@@ -894,7 +864,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else {
                     return
                 }
-                autoMode.dismiss(suggestion)
                 updateMenuState(message: "Suggestions Beta is watching")
             }
         )
@@ -904,16 +873,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func beginUserInitiatedScenario() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             return
         }
-        autoModeSuggestionPanel.hide()
-        autoMode.pauseSuggestions(for: 60)
+        featureProvider.hideAutoModeSuggestion()
+        featureProvider.pauseAutoMode(for: 60)
     }
 
     @objc
     private func toggleVoiceCommand() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             mainWindow.show(section: .arrange)
             return
         }
@@ -922,11 +891,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        switch voiceCommand.state {
+        switch featureProvider.voiceState {
         case .idle:
             Task { @MainActor in
                 do {
-                    try await voiceCommand.startListening()
+                    try await featureProvider.startVoiceListening()
                     voiceHUD.showListening()
                     updateMenuState()
                 } catch {
@@ -938,7 +907,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .listening:
             Task { @MainActor in
                 do {
-                    let summary = try await voiceCommand.stopAndRun(
+                    let summary = try await featureProvider.stopVoiceAndRun(
                         scenarios: customScenarioStore.scenarios.map {
                             scenario in
                             VoiceScenarioReference(
@@ -974,7 +943,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func executeVoiceAction(
         _ call: RealtimeToolCall
     ) async throws -> String {
-        if !PaneCueReleaseProfile.current.isExperimental,
+        if !featureProvider.isExperimental,
            (
                call.action == .applyCodeAndCall
                    || call.action == .showBrowserVideo
@@ -990,31 +959,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch call.action {
         case .applyCodeAndCall:
-            let videoSummary = try await callVideoPreview.startCallCapture()
+            let videoSummary = try await featureProvider.startCallCapture()
             do {
                 let layoutSummary = try windowManager.applyCodeAndCallLayout()
                 return "\(layoutSummary) · \(videoSummary)"
             } catch {
-                await callVideoPreview.stopCapture()
+                await featureProvider.stopVideoCapture()
                 throw error
             }
 
         case .applyDocumentationAndCode:
-            await callVideoPreview.stopCapture()
+            await featureProvider.stopVideoCapture()
             return try windowManager.applyDocumentationAndCodeLayout()
 
         case .applyNotesAndBrowser:
-            await callVideoPreview.stopCapture()
+            await featureProvider.stopVideoCapture()
             return try windowManager.applyNotesAndBrowserLayout()
 
         case .showBrowserVideo:
             if windowManager.canRestore {
                 _ = try windowManager.restorePreviousLayout()
             }
-            return try await callVideoPreview.startBrowserVideoCapture()
+            return try await featureProvider.startBrowserVideoCapture()
 
         case .arrangeDynamicWorkspace:
-            await callVideoPreview.stopCapture()
+            await featureProvider.stopVideoCapture()
             let scenario = try DynamicWorkspaceScenarioBuilder.scenario(
                 from: call.arguments
             )
@@ -1042,7 +1011,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyDocumentationAndCode() {
         beginUserInitiatedScenario()
         Task { @MainActor in
-            await callVideoPreview.stopCapture()
+            await featureProvider.stopVideoCapture()
             do {
                 try await applicationLauncher.ensureApplications(
                     for: .applyDocumentationAndCode
@@ -1059,7 +1028,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyNotesAndBrowser() {
         beginUserInitiatedScenario()
         Task { @MainActor in
-            await callVideoPreview.stopCapture()
+            await featureProvider.stopVideoCapture()
             do {
                 try await applicationLauncher.ensureApplications(
                     for: .applyNotesAndBrowser
@@ -1074,7 +1043,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func applyCodeAndCall() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             return
         }
         beginUserInitiatedScenario()
@@ -1084,11 +1053,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     for: .applyCodeAndCall
                 )
                 updateMenuState(message: "Starting call video…")
-                let videoSummary = try await callVideoPreview.startCallCapture()
+                let videoSummary = try await featureProvider.startCallCapture()
                 let layoutSummary = try windowManager.applyCodeAndCallLayout()
                 updateMenuState(message: "\(layoutSummary) · \(videoSummary)")
             } catch {
-                await callVideoPreview.stopCapture()
+                await featureProvider.stopVideoCapture()
                 presentError(error)
             }
         }
@@ -1096,7 +1065,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func showBrowserVideo() {
-        guard PaneCueReleaseProfile.current.isExperimental else {
+        guard featureProvider.isExperimental else {
             return
         }
         beginUserInitiatedScenario()
@@ -1109,10 +1078,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     _ = try windowManager.restorePreviousLayout()
                 }
                 updateMenuState(message: "Extracting browser video…")
-                let summary = try await callVideoPreview.startBrowserVideoCapture()
+                let summary = try await featureProvider
+                    .startBrowserVideoCapture()
                 updateMenuState(message: summary)
             } catch {
-                await callVideoPreview.stopCapture()
+                await featureProvider.stopVideoCapture()
                 presentError(error)
             }
         }
@@ -1122,9 +1092,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ scenario: CustomScenario
     ) async throws -> String {
         try ensureAccessibilityForApply()
-        await callVideoPreview.stopCapture()
+        await featureProvider.stopVideoCapture()
         var effectiveScenario = scenario
-        if !PaneCueReleaseProfile.current.isExperimental {
+        if !featureProvider.isExperimental {
             effectiveScenario.conditions = ScenarioConditions()
         }
         try await applicationLauncher.ensureApplications(
@@ -1146,12 +1116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc
     private func restorePreviousLayout() {
-        autoModeSuggestionPanel.hide()
+        featureProvider.hideAutoModeSuggestion()
         Task { @MainActor in
             do {
                 let summary = try await restoreWorkspace()
                 updateMenuState(message: summary)
-                autoMode.workspaceMayHaveChanged()
+                featureProvider.autoModeWorkspaceMayHaveChanged()
             } catch {
                 presentError(error)
             }
@@ -1159,8 +1129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func restoreWorkspace() async throws -> String {
-        let hadFloatingVideo = callVideoPreview.isCapturing
-        await callVideoPreview.stopCapture()
+        let hadFloatingVideo = featureProvider.isVideoCaptureActive
+        await featureProvider.stopVideoCapture()
 
         if windowManager.canRestore {
             let layoutSummary = try windowManager.restorePreviousLayout()
@@ -1179,12 +1149,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc
     private func quit() {
         Task { @MainActor in
-            autoModeSuggestionPanel.hide()
-            voiceCommand.cancel()
+            featureProvider.hideAutoModeSuggestion()
+            featureProvider.cancelVoice()
             commandLab.cancelListening()
             voiceHUD.hide()
             await offlinePack.shutdown()
-            await callVideoPreview.stopCapture()
+            await featureProvider.shutdown()
             NSApp.terminate(nil)
         }
     }

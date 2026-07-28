@@ -47,7 +47,7 @@ enum PaneCuePrivacyPane {
 struct PaneCueDashboardSnapshot {
     let statusMessage: String
     let activeScenarioName: String?
-    let voiceState: RealtimeVoiceCommandController.State
+    let voiceState: PaneCueVoiceState
     let canRestore: Bool
     let isAutoModeEnabled: Bool
 }
@@ -89,8 +89,7 @@ final class PaneCueDashboardModel: ObservableObject {
     @Published private(set) var scenarios: [CustomScenario]
     @Published private(set) var statusMessage = "Ready"
     @Published private(set) var activeScenarioName: String?
-    @Published private(set) var voiceState:
-        RealtimeVoiceCommandController.State = .idle
+    @Published private(set) var voiceState: PaneCueVoiceState = .idle
     @Published private(set) var canRestore = false
     @Published private(set) var hasAccessibilityPermission = false
     @Published private(set) var hasScreenRecordingPermission = false
@@ -111,7 +110,7 @@ final class PaneCueDashboardModel: ObservableObject {
     let offlinePack: OfflinePackManager
 
     private let store: CustomScenarioStore
-    private let keyStore: OpenAIAPIKeyStore
+    private let featureProvider: any PaneCueFeatureProvider
     private let actions: PaneCueDashboardActions
     private let defaults: UserDefaults
 
@@ -143,7 +142,7 @@ final class PaneCueDashboardModel: ObservableObject {
 
     init(
         store: CustomScenarioStore,
-        keyStore: OpenAIAPIKeyStore,
+        featureProvider: any PaneCueFeatureProvider,
         aiSettings: AIEngineSettingsStore,
         connectivity: ConnectivityMonitor,
         offlinePack: OfflinePackManager,
@@ -151,14 +150,14 @@ final class PaneCueDashboardModel: ObservableObject {
         actions: PaneCueDashboardActions
     ) {
         self.store = store
-        self.keyStore = keyStore
+        self.featureProvider = featureProvider
         self.aiSettings = aiSettings
         self.connectivity = connectivity
         self.offlinePack = offlinePack
         self.defaults = defaults
         self.actions = actions
         isOnboardingPresented =
-            PaneCueReleaseProfile.current.isExperimental
+            featureProvider.isExperimental
                 && defaults.integer(forKey: Self.onboardingVersionKey)
                     < Self.onboardingVersion
         scenarios = store.scenarios
@@ -181,14 +180,12 @@ final class PaneCueDashboardModel: ObservableObject {
     func refreshPermissions() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         hasScreenRecordingPermission =
-            PaneCueReleaseProfile.current.isExperimental
-                && CGPreflightScreenCaptureAccess()
+            featureProvider.hasScreenRecordingPermission
         microphoneAuthorizationStatus =
             AVCaptureDevice.authorizationStatus(for: .audio)
         speechRecognitionAuthorizationStatus =
             SFSpeechRecognizer.authorizationStatus()
-        hasAPIKey = PaneCueReleaseProfile.current.isExperimental
-            && keyStore.hasKey
+        hasAPIKey = featureProvider.hasAPIKey
     }
 
     func openScenarios() {
@@ -384,7 +381,7 @@ final class MainWindowController {
 
     init(
         store: CustomScenarioStore,
-        keyStore: OpenAIAPIKeyStore,
+        featureProvider: any PaneCueFeatureProvider,
         aiSettings: AIEngineSettingsStore,
         connectivity: ConnectivityMonitor,
         offlinePack: OfflinePackManager,
@@ -392,7 +389,7 @@ final class MainWindowController {
     ) {
         model = PaneCueDashboardModel(
             store: store,
-            keyStore: keyStore,
+            featureProvider: featureProvider,
             aiSettings: aiSettings,
             connectivity: connectivity,
             offlinePack: offlinePack,
