@@ -65,6 +65,8 @@ struct PaneCueDashboardActions {
     let openPrivacyPane: @MainActor (PaneCuePrivacyPane) -> Void
     let setAutoModeEnabled: @MainActor (Bool) -> Void
     let scenariosDidChange: @MainActor () -> Void
+    let beginArrangement: @MainActor () -> Void
+    let discardArrangement: @MainActor () -> Void
     let analyzeCommand: @MainActor
         (String, WorkspacePlan?) async throws -> CommandLabAnalysis
     let applyAnalyzedCommand: @MainActor
@@ -194,8 +196,13 @@ final class PaneCueDashboardModel: ObservableObject {
     }
 
     func startNewArrangement() {
+        actions.beginArrangement()
         arrangementRevision += 1
         selectedSection = .arrange
+    }
+
+    func discardArrangementPreview() {
+        actions.discardArrangement()
     }
 
     func saveScenarios(_ updatedScenarios: [CustomScenario]) {
