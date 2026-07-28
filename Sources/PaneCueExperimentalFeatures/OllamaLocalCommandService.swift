@@ -24,6 +24,47 @@ enum OllamaLocalCommandError: LocalizedError {
     }
 }
 
+enum OllamaModelPresence: Equatable, Sendable {
+    case running
+    case notRunning
+    case unknown
+}
+
+struct OllamaModelOwnership: Equatable, Sendable {
+    private var ownedModels: [String: String] = [:]
+
+    var modelNames: [String] {
+        ownedModels.values.sorted()
+    }
+
+    mutating func recordPaneCueLoad(
+        model: String,
+        priorPresence: OllamaModelPresence
+    ) {
+        guard priorPresence == .notRunning else {
+            return
+        }
+        ownedModels[Self.canonicalName(model)] = model
+    }
+
+    mutating func recordUnload(model: String) {
+        ownedModels.removeValue(forKey: Self.canonicalName(model))
+    }
+
+    func owns(model: String) -> Bool {
+        ownedModels[Self.canonicalName(model)] != nil
+    }
+
+    static func canonicalName(_ model: String) -> String {
+        let normalized = model
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.contains(":")
+            ? normalized
+            : "\(normalized):latest"
+    }
+}
+
 actor OllamaLocalCommandService {
     static let requiredModels = [
         "panecue-qwen3:1.0"
@@ -31,6 +72,7 @@ actor OllamaLocalCommandService {
 
     private let baseURL = URL(string: "http://127.0.0.1:11434")!
     private var serverProcess: Process?
+    private var modelOwnership = OllamaModelOwnership()
 
     var isRuntimeAvailable: Bool {
         executableURL != nil
@@ -116,16 +158,33 @@ actor OllamaLocalCommandService {
         try await ensureServer()
 
         for model in selection.ollamaModelNames {
-            let data = try await request(
-                path: "api/chat",
-                method: "POST",
-                body: Self.chatBody(
+            let priorPresence = await modelPresence(model)
+            let data: Data
+            do {
+                data = try await request(
+                    path: "api/chat",
+                    method: "POST",
+                    body: Self.chatBody(
+                        model: model,
+                        transcript: transcript,
+                        scenarios: scenarios
+                    ),
+                    timeout: 90
+                )
+                modelOwnership.recordPaneCueLoad(
                     model: model,
-                    transcript: transcript,
-                    scenarios: scenarios
-                ),
-                timeout: 90
-            )
+                    priorPresence: priorPresence
+                )
+            } catch {
+                if priorPresence == .notRunning,
+                   await modelPresence(model) == .running {
+                    modelOwnership.recordPaneCueLoad(
+                        model: model,
+                        priorPresence: .notRunning
+                    )
+                }
+                throw error
+            }
             if LocalModelResponseParser.explicitlyDeclinesAction(
                 from: data
             ) {
@@ -139,34 +198,31 @@ actor OllamaLocalCommandService {
         throw OllamaLocalCommandError.modelReturnedNoAction
     }
 
-    func unloadRunningModels() async {
-        guard (try? await healthCheck()) == true,
-              let data = try? await request(path: "api/ps"),
-              let root = try? JSONSerialization.jsonObject(with: data)
-                as? [String: Any],
-              let models = root["models"] as? [[String: Any]]
-        else {
+    func unloadOwnedModels() async {
+        guard (try? await healthCheck()) == true else {
             return
         }
 
-        for model in models {
-            guard let name = model["name"] as? String else {
+        for model in modelOwnership.modelNames {
+            do {
+                _ = try await request(
+                    path: "api/generate",
+                    method: "POST",
+                    body: [
+                        "model": model,
+                        "keep_alive": 0
+                    ],
+                    timeout: 30
+                )
+                modelOwnership.recordUnload(model: model)
+            } catch {
                 continue
             }
-            _ = try? await request(
-                path: "api/generate",
-                method: "POST",
-                body: [
-                    "model": name,
-                    "keep_alive": 0
-                ],
-                timeout: 30
-            )
         }
     }
 
     func shutdown() async {
-        await unloadRunningModels()
+        await unloadOwnedModels()
         if let serverProcess, serverProcess.isRunning {
             serverProcess.terminate()
         }
@@ -215,6 +271,27 @@ actor OllamaLocalCommandService {
     private func healthCheck() async throws -> Bool {
         _ = try await request(path: "api/tags", timeout: 2)
         return true
+    }
+
+    private func modelPresence(
+        _ model: String
+    ) async -> OllamaModelPresence {
+        guard let data = try? await request(path: "api/ps"),
+              let root = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any],
+              let models = root["models"] as? [[String: Any]]
+        else {
+            return .unknown
+        }
+
+        let target = OllamaModelOwnership.canonicalName(model)
+        let isRunning = models.contains { runningModel in
+            guard let name = runningModel["name"] as? String else {
+                return false
+            }
+            return OllamaModelOwnership.canonicalName(name) == target
+        }
+        return isRunning ? .running : .notRunning
     }
 
     private var executableURL: URL? {

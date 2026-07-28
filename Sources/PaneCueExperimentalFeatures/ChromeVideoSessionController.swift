@@ -46,18 +46,7 @@ final class ChromeVideoSessionController {
         let tabID: String
     }
 
-    private static let sourceWindowName = "PaneCue Video Source"
-    private static let sourceWindowDefaultsKey =
-        "PaneCue.chromeVideo.sourceWindowID"
     private var session: ActiveSession?
-
-    init() {
-        if UserDefaults.standard.object(
-            forKey: Self.sourceWindowDefaultsKey
-        ) != nil {
-            closeAbandonedSourceWindow()
-        }
-    }
 
     var isActive: Bool {
         session != nil
@@ -82,8 +71,6 @@ final class ChromeVideoSessionController {
     func startNativePictureInPicture(
         preferredWindowFrame: CGRect? = nil
     ) async throws {
-        closeAbandonedSourceWindow()
-
         let source = try sourceReference(
             preferredWindowFrame: preferredWindowFrame
         )
@@ -201,7 +188,6 @@ final class ChromeVideoSessionController {
 
     func stop() {
         guard let session else {
-            closeAbandonedSourceWindow()
             return
         }
         self.session = nil
@@ -408,14 +394,16 @@ final class ChromeVideoSessionController {
                             end if
                         end repeat
                     end if
-                    set sourceTabIndex to 1
+                    set sourceTabIndex to 0
                     repeat with tabIndex from 1 to (count of tabs of originalWindow)
                         if (id of tab tabIndex of originalWindow as text) is \(quoted(session.originalTabID)) then
                             set sourceTabIndex to tabIndex
                             exit repeat
                         end if
                     end repeat
-                    set active tab index of originalWindow to sourceTabIndex
+                    if sourceTabIndex is greater than 0 then
+                        set active tab index of originalWindow to sourceTabIndex
+                    end if
                     set minimized of originalWindow to false
                     set index of originalWindow to 1
                 end try
@@ -494,54 +482,6 @@ final class ChromeVideoSessionController {
             throw error
         }
         return descriptor.stringValue ?? ""
-    }
-
-    private func closeAbandonedSourceWindow() {
-        let persistedWindowID = UserDefaults.standard.object(
-            forKey: Self.sourceWindowDefaultsKey
-        ) as? NSNumber
-        let persistedCleanup: String
-        if let persistedWindowID {
-            persistedCleanup =
-                """
-                try
-                    close window id \(persistedWindowID.uint32Value)
-                end try
-                """
-        } else {
-            persistedCleanup = ""
-        }
-
-        _ = try? runDescriptor(
-            """
-            tell application "Google Chrome"
-                \(persistedCleanup)
-                set sourceWindows to every window whose given name is \(quoted(Self.sourceWindowName))
-                repeat with sourceWindow in sourceWindows
-                    try
-                        close sourceWindow
-                    end try
-                end repeat
-                set oldOriginalWindows to every window whose given name is "PaneCue Original Window"
-                repeat with originalWindow in oldOriginalWindows
-                    try
-                        set given name of originalWindow to ""
-                    end try
-                end repeat
-                repeat with candidateWindow in windows
-                    try
-                        set candidateBounds to bounds of candidateWindow
-                        if (item 1 of candidateBounds) < -5000 then
-                            close candidateWindow
-                        end if
-                    end try
-                end repeat
-            end tell
-            """
-        )
-        UserDefaults.standard.removeObject(
-            forKey: Self.sourceWindowDefaultsKey
-        )
     }
 
     private func runDescriptor(

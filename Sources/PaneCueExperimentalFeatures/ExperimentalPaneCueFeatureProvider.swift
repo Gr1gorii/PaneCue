@@ -26,6 +26,7 @@ public final class ExperimentalPaneCueFeatureProvider:
     private var context: PaneCueFeatureProviderContext?
     private var voiceCommand: RealtimeVoiceCommandController?
     private var autoMode: AutoModeController?
+    private var didShutdown = false
 
     public init() {}
 
@@ -208,6 +209,10 @@ public final class ExperimentalPaneCueFeatureProvider:
     }
 
     public func shutdown() async {
+        guard !didShutdown else {
+            return
+        }
+        didShutdown = true
         suggestionPanel.hide()
         voiceCommand?.cancel()
         await offlinePack.shutdown()
