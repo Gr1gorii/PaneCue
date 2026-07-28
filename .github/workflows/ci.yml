@@ -29,8 +29,16 @@ jobs:
       - name: Run tests
         run: swift test
 
-      - name: Package local app
+      - name: Package stable app
         run: ./scripts/package_app.sh
 
-      - name: Verify app signature
-        run: codesign --verify --deep --strict build/PaneCue.app
+      - name: Verify stable binary separation
+        run: ./scripts/verify_stable_binary_separation.sh build/PaneCue.app
+
+      - name: Package experimental app
+        run: ./scripts/package_app.sh --experimental
+
+      - name: Verify app signatures
+        run: |
+          codesign --verify --deep --strict build/PaneCue.app
+          codesign --verify --deep --strict "build/PaneCue Experimental.app"

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import PaneCueApp
@@ -123,6 +124,38 @@ struct TargetStructureTests {
     }
 
     @Test
+    @MainActor
+    func stableProviderContributesNoExperimentalMenuItems() {
+        let stable = StablePaneCueFeatureProvider()
+        let menu = NSMenu()
+
+        stable.installStatusMenuItems(in: menu)
+        stable.refreshStatusMenuItems()
+
+        #expect(menu.items.isEmpty)
+    }
+
+    @Test
+    @MainActor
+    func experimentalProviderKeepsItsFeatureMenuItems() {
+        let experimental = ExperimentalPaneCueFeatureProvider()
+        let menu = NSMenu()
+
+        experimental.installStatusMenuItems(in: menu)
+
+        let titles = menu.items
+            .filter { !$0.isSeparatorItem }
+            .map(\.title)
+        #expect(titles.contains("OpenAI API Key…"))
+        #expect(titles.contains("Start Voice Command (⌥ Space)"))
+        #expect(titles.contains("Suggestions Beta"))
+        #expect(titles.contains("Code + Call"))
+        #expect(titles.contains("Documentation + Code"))
+        #expect(titles.contains("Notes + Browser"))
+        #expect(titles.contains("Browser Video"))
+    }
+
+    @Test
     func stableAppHasNoForbiddenImplementationReferences() throws {
         let stableDirectory = repositoryRoot
             .appendingPathComponent("Sources/PaneCueApp")
@@ -148,6 +181,68 @@ struct TargetStructureTests {
 
         for reference in forbiddenReferences {
             #expect(!source.contains(reference))
+        }
+
+        let appDelegate = try sourceText(
+            at: "Sources/PaneCueApp/AppDelegate.swift"
+        )
+        let experimentalSelectors = [
+            "#selector(configureCloudAccess)",
+            "#selector(toggleVoiceCommand)",
+            "#selector(toggleAutoMode)",
+            "#selector(applyCodeAndCall)",
+            "#selector(showBrowserVideo)"
+        ]
+        for selector in experimentalSelectors {
+            #expect(!appDelegate.contains(selector))
+        }
+    }
+
+    @Test
+    func binarySeparationGateIsRequiredByCIAndAcceptance() throws {
+        let gate = try sourceText(
+            at: "scripts/verify_stable_binary_separation.sh"
+        )
+        let ci = try sourceText(at: ".github/workflows/ci.yml")
+        let acceptance = try sourceText(
+            at: "scripts/run_v01_acceptance.sh"
+        )
+
+        #expect(gate.contains("codesign -d --entitlements"))
+        #expect(gate.contains("otool -L"))
+        #expect(gate.contains("otool -ov"))
+        #expect(gate.contains("wss://api.openai.com"))
+        #expect(gate.contains("127.0.0.1:11434"))
+        #expect(gate.contains("execute targetTab javascript"))
+        #expect(ci.contains("verify_stable_binary_separation.sh"))
+        #expect(acceptance.contains("verify_stable_binary_separation.sh"))
+    }
+
+    @Test
+    func stableArrangementSourcesContainNoNetworkClient() throws {
+        let directories = [
+            repositoryRoot.appendingPathComponent("Sources/PaneCueCore"),
+            repositoryRoot.appendingPathComponent("Sources/PaneCueApp")
+        ]
+        let files = try directories.flatMap { directory in
+            try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).filter { $0.pathExtension == "swift" }
+        }
+        let source = try files
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        let requestAPIs = [
+            "URLSession",
+            "URLRequest",
+            "NWConnection",
+            "webSocketTask",
+            "dataTask(with:"
+        ]
+
+        for requestAPI in requestAPIs {
+            #expect(!source.contains(requestAPI))
         }
     }
 

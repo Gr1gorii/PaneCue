@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PaneCueCore
 
@@ -31,6 +32,9 @@ public struct PaneCueFeatureProviderContext {
     public let shouldPresentSuggestion: () -> Bool
     public let suggestionHandler: (AutoModeSuggestion) -> Void
     public let stateDidChange: (String?) -> Void
+    public let runFeatureAction: (VoiceCommandAction) -> Void
+    public let toggleVoiceCommand: () -> Void
+    public let configureCloudAccess: () -> Void
 
     public init(
         aiSettings: AIEngineSettingsStore,
@@ -38,7 +42,10 @@ public struct PaneCueFeatureProviderContext {
         windowManager: WindowManager,
         shouldPresentSuggestion: @escaping () -> Bool,
         suggestionHandler: @escaping (AutoModeSuggestion) -> Void,
-        stateDidChange: @escaping (String?) -> Void
+        stateDidChange: @escaping (String?) -> Void,
+        runFeatureAction: @escaping (VoiceCommandAction) -> Void,
+        toggleVoiceCommand: @escaping () -> Void,
+        configureCloudAccess: @escaping () -> Void
     ) {
         self.aiSettings = aiSettings
         self.connectivity = connectivity
@@ -46,6 +53,9 @@ public struct PaneCueFeatureProviderContext {
         self.shouldPresentSuggestion = shouldPresentSuggestion
         self.suggestionHandler = suggestionHandler
         self.stateDidChange = stateDidChange
+        self.runFeatureAction = runFeatureAction
+        self.toggleVoiceCommand = toggleVoiceCommand
+        self.configureCloudAccess = configureCloudAccess
     }
 }
 
@@ -63,6 +73,8 @@ public protocol PaneCueFeatureProvider: AnyObject {
 
     func configure(context: PaneCueFeatureProviderContext)
     func start()
+    func installStatusMenuItems(in menu: NSMenu)
+    func refreshStatusMenuItems()
     func processingModeDidChange(_ mode: AIProcessingMode)
     func connectivityDidChange(isOnline: Bool)
     func configureAPIKey() throws -> String?

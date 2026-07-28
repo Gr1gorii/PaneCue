@@ -23,20 +23,20 @@ assert_plist_absent() {
     fi
 }
 
-echo "[1/6] Running automated acceptance and regression tests"
+echo "[1/7] Running automated acceptance and regression tests"
 swift test --package-path "${PROJECT_DIR}"
 swift build --package-path "${PROJECT_DIR}" --product PaneCue
 swift build --package-path "${PROJECT_DIR}" --product PaneCueExperimental
 
-echo "[2/6] Packaging the stable v0.2 development candidate"
+echo "[2/7] Packaging the stable v0.2 development candidate"
 "${PROJECT_DIR}/scripts/package_app.sh"
 
-echo "[3/6] Verifying the signed application bundle"
+echo "[3/7] Verifying the signed application bundle"
 codesign --verify --deep --strict "${APP_DIR}"
 [[ -x "${APP_DIR}/Contents/MacOS/PaneCue" ]] \
     || fail "PaneCue executable is missing"
 
-echo "[4/6] Verifying the frozen stable profile"
+echo "[4/7] Verifying the frozen stable profile"
 [[ "$(plist_value CFBundleIdentifier)" == "io.github.gr1gorii.PaneCue" ]] \
     || fail "unexpected stable bundle identifier"
 [[ "$(plist_value CFBundleShortVersionString)" == "0.2.0" ]] \
@@ -53,15 +53,19 @@ assert_plist_absent NSScreenCaptureUsageDescription
 assert_plist_absent NSAppleEventsUsageDescription
 assert_plist_absent NSLocalNetworkUsageDescription
 
-echo "[5/6] Verifying the bundled offline parser"
+echo "[5/7] Verifying physical Stable/Experimental separation"
+"${PROJECT_DIR}/scripts/verify_stable_binary_separation.sh" "${APP_DIR}"
+
+echo "[6/7] Verifying the bundled offline parser"
 [[ -s "${MODEL_FILE}" ]] || fail "PaneCue Mini v2 is missing"
 MODEL_BYTES="$(stat -f '%z' "${MODEL_FILE}")"
 [[ "${MODEL_BYTES}" -le 1048576 ]] \
     || fail "PaneCue Mini v2 exceeds the 1 MiB release budget"
 
-echo "[6/6] Verifying release tooling"
+echo "[7/7] Verifying release tooling"
 bash -n \
     "${PROJECT_DIR}/scripts/package_app.sh" \
+    "${PROJECT_DIR}/scripts/verify_stable_binary_separation.sh" \
     "${PROJECT_DIR}/scripts/build_release_dmg.sh"
 plutil -lint \
     "${PROJECT_DIR}/Resources/Info.plist" \
