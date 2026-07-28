@@ -146,7 +146,9 @@ open "build/PaneCue Experimental.app"
 The two applications are separate SwiftPM products. `PaneCue` depends on
 `PaneCueApp` only; `PaneCueExperimental` links the additional
 `PaneCueExperimentalFeatures` target. Experimental implementations are not a
-dependency of the stable executable.
+dependency of the stable executable. `PaneCueApp` communicates with optional
+capabilities only through `PaneCueFeatureProvider`; the experimental
+executable injects its provider during launch.
 
 The PaneCue Experimental first-launch setup lets you choose how voice commands are processed:
 

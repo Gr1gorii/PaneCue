@@ -7,23 +7,21 @@ import PaneCueCore
 enum PaneCueDiagnostics {
     static func report(
         scenarios: [CustomScenario],
-        correctionCount: Int
+        correctionCount: Int,
+        features: PaneCueFeatureDiagnostics
     ) -> String {
         let bundle = Bundle.main
         let identity = PaneCueReleaseIdentity(
             infoDictionary: bundle.infoDictionary
         )
-        let profile = PaneCueReleaseProfile.current
         let report = Report(
             schemaVersion: 1,
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             application: ApplicationSummary(
                 version: identity.version,
                 build: identity.build,
-                profile: profile.rawValue,
-                processing: profile.isExperimental
-                    ? "User-selected experimental mode"
-                    : "Offline Only"
+                profile: features.profile,
+                processing: features.processing
             ),
             system: SystemSummary(
                 macOS: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -34,9 +32,7 @@ enum PaneCueDiagnostics {
                 accessibility: AXIsProcessTrusted(),
                 microphone: microphoneStatus,
                 speechRecognition: speechRecognitionStatus,
-                screenRecording: profile.isExperimental
-                    ? screenRecordingStatus
-                    : "not present in stable profile"
+                screenRecording: features.screenRecording
             ),
             localData: LocalDataSummary(
                 cueCount: scenarios.count,
@@ -88,10 +84,6 @@ enum PaneCueDiagnostics {
         case .notDetermined: return "not requested"
         @unknown default: return "unknown"
         }
-    }
-
-    private static var screenRecordingStatus: String {
-        CGPreflightScreenCaptureAccess() ? "authorized" : "not authorized"
     }
 
     private struct Report: Encodable {
