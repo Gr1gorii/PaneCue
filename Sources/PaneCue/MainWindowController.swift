@@ -117,9 +117,9 @@ final class PaneCueDashboardModel: ObservableObject {
 
     private static let onboardingVersion = 1
     private static let onboardingVersionKey =
-        "PaneCue.Onboarding.completedVersion"
+        PaneCuePersistenceKey.onboardingCompletedVersion
     private static let textOnboardingKey =
-        "PaneCue.Arrange.completedFirstApply"
+        PaneCuePersistenceKey.completedFirstApply
 
     var hasMicrophonePermission: Bool {
         microphoneAuthorizationStatus == .authorized
@@ -427,7 +427,8 @@ final class MainWindowController {
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
 
-        let frameAutosaveName = "PaneCue.MainWindow"
+        let frameAutosaveName =
+            PaneCuePersistenceKey.mainWindowFrameAutosaveName
         restoredSavedFrame = window.setFrameUsingName(
             frameAutosaveName
         )

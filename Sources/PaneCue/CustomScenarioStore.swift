@@ -4,8 +4,6 @@ import PaneCueCore
 @MainActor
 final class CustomScenarioStore {
     private let defaults: UserDefaults
-    private let storageKey = "PaneCue.customScenarios.v2"
-    private let legacyStorageKey = "PaneCue.customScenarios.v1"
 
     private(set) var scenarios: [CustomScenario] = []
 
@@ -39,8 +37,11 @@ final class CustomScenarioStore {
     }
 
     private func load() {
-        let data = defaults.data(forKey: storageKey)
-            ?? defaults.data(forKey: legacyStorageKey)
+        let data = defaults.data(
+            forKey: PaneCuePersistenceKey.customScenarios
+        ) ?? defaults.data(
+            forKey: PaneCuePersistenceKey.legacyCustomScenarios
+        )
         guard let data,
               let decoded = try? JSONDecoder().decode(
                   [CustomScenario].self,
@@ -59,7 +60,10 @@ final class CustomScenarioStore {
         guard let data = try? JSONEncoder().encode(scenarios) else {
             return
         }
-        defaults.set(data, forKey: storageKey)
+        defaults.set(
+            data,
+            forKey: PaneCuePersistenceKey.customScenarios
+        )
     }
 
     private static func normalized(
