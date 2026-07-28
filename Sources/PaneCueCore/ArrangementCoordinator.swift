@@ -81,19 +81,69 @@ public enum ArrangementRollbackAuthority: Sendable {
     case directUserAction
 }
 
+public enum ArrangementCoordinatorPhase: String, Codable, Hashable, Sendable {
+    case idle
+    case editing
+    case parsing
+    case resolving
+    case awaitingSelection
+    case ready
+    case applying
+    case result
+    case restoring
+}
+
+public struct ArrangementCoordinatorState: Hashable, Sendable {
+    public let phase: ArrangementCoordinatorPhase
+    public let preview: ArrangementPreview?
+    public let result: WorkspaceApplyResult?
+    public let canRollback: Bool
+
+    public var canApply: Bool {
+        phase == .ready
+    }
+
+    fileprivate init(
+        phase: ArrangementCoordinatorPhase,
+        preview: ArrangementPreview?,
+        result: WorkspaceApplyResult?,
+        canRollback: Bool
+    ) {
+        self.phase = phase
+        self.preview = preview
+        self.result = result
+        self.canRollback = canRollback
+    }
+}
+
 public enum ArrangementCoordinatorError: LocalizedError, Equatable, Sendable {
+    case preparationSuperseded
     case stalePreview
     case previewNotReady
+    case applyUnavailable
+    case applyAlreadyInProgress
     case rollbackUnavailable
+    case restoreAlreadyInProgress
+    case transactionInProgress
 
     public var errorDescription: String? {
         switch self {
+        case .preparationSuperseded:
+            return "A newer arrangement request replaced this one."
         case .stalePreview:
             return "This Preview is no longer active. Review the latest plan before applying it."
         case .previewNotReady:
             return "Resolve every required window before applying this Preview."
+        case .applyUnavailable:
+            return "Apply is available only for a ready Preview."
+        case .applyAlreadyInProgress:
+            return "PaneCue is already applying an arrangement."
         case .rollbackUnavailable:
             return "There is no arrangement available to restore."
+        case .restoreAlreadyInProgress:
+            return "PaneCue is already restoring an arrangement."
+        case .transactionInProgress:
+            return "Wait for the current arrangement operation to finish."
         }
     }
 }
@@ -141,30 +191,110 @@ public struct ArrangementCoordinatorPipeline: Sendable {
 /// Closing a UI should call `discardPreview`; it never causes Apply.
 public actor ArrangementCoordinator {
     private let pipeline: ArrangementCoordinatorPipeline
+    private var phase: ArrangementCoordinatorPhase = .idle
     private var activePreview: ArrangementPreview?
+    private var lastResult: WorkspaceApplyResult?
     private var canRollback = false
+    private var preparationID: UUID?
+    private var parsingTask: Task<WorkspacePlan, Error>?
 
     public init(pipeline: ArrangementCoordinatorPipeline) {
         self.pipeline = pipeline
     }
 
+    public func currentState() -> ArrangementCoordinatorState {
+        ArrangementCoordinatorState(
+            phase: phase,
+            preview: activePreview,
+            result: lastResult,
+            canRollback: canRollback
+        )
+    }
+
+    public func beginEditing() {
+        guard !isTransactionInProgress else {
+            return
+        }
+        supersedePreparation()
+        activePreview = nil
+        lastResult = nil
+        canRollback = false
+        phase = .editing
+    }
+
     public func preparePreview(
         id: UUID = UUID(),
         source: ArrangementRequestSource,
-        makeDraft: @Sendable () async throws -> WorkspacePlan
+        makeDraft: @escaping @Sendable () async throws -> WorkspacePlan
     ) async throws -> ArrangementPreview {
-        let plan = try await makeDraft()
+        guard !isTransactionInProgress else {
+            throw ArrangementCoordinatorError.transactionInProgress
+        }
+
+        supersedePreparation()
+        let requestID = UUID()
+        preparationID = requestID
+        activePreview = nil
+        lastResult = nil
+        canRollback = false
+        phase = .parsing
+
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let plan = try await makeDraft()
+            try Task.checkCancellation()
+            return plan
+        }
+        parsingTask = task
+
+        let plan: WorkspacePlan
+        do {
+            plan = try await task.value
+        } catch {
+            guard preparationID == requestID else {
+                throw ArrangementCoordinatorError.preparationSuperseded
+            }
+            finishPreparation()
+            phase = .editing
+            if error is CancellationError {
+                throw ArrangementCoordinatorError.preparationSuperseded
+            }
+            throw error
+        }
+
+        guard preparationID == requestID else {
+            throw ArrangementCoordinatorError.preparationSuperseded
+        }
+        parsingTask = nil
+        phase = .resolving
+
         let draft = ArrangementDraft(
             id: id,
             source: source,
             plan: plan
         )
-        let eligibility = try await pipeline.preparePreview(draft)
+        let eligibility: ArrangementPreviewEligibility
+        do {
+            eligibility = try await pipeline.preparePreview(draft)
+        } catch {
+            guard preparationID == requestID else {
+                throw ArrangementCoordinatorError.preparationSuperseded
+            }
+            finishPreparation()
+            phase = .editing
+            throw error
+        }
+
+        guard preparationID == requestID else {
+            throw ArrangementCoordinatorError.preparationSuperseded
+        }
+        finishPreparation()
         let preview = ArrangementPreview(
             draft: draft,
             eligibility: eligibility
         )
         activePreview = preview
+        phase = phaseForEligibility(eligibility)
         return preview
     }
 
@@ -172,11 +302,37 @@ public actor ArrangementCoordinator {
         activePreview
     }
 
+    @discardableResult
+    public func updatePreviewEligibility(
+        previewID: UUID,
+        eligibility: ArrangementPreviewEligibility
+    ) throws -> ArrangementPreview {
+        guard let preview = activePreview,
+              preview.id == previewID else {
+            throw ArrangementCoordinatorError.stalePreview
+        }
+        guard phase == .awaitingSelection || phase == .ready else {
+            throw ArrangementCoordinatorError.applyUnavailable
+        }
+
+        let updated = preview.revalidated(as: eligibility)
+        activePreview = updated
+        phase = phaseForEligibility(eligibility)
+        return updated
+    }
+
     public func discardPreview(id: UUID? = nil) {
+        guard !isTransactionInProgress else {
+            return
+        }
         guard id == nil || activePreview?.id == id else {
             return
         }
+        supersedePreparation()
         activePreview = nil
+        lastResult = nil
+        canRollback = false
+        phase = .idle
     }
 
     public func apply(
@@ -192,17 +348,42 @@ public actor ArrangementCoordinator {
               preview.id == previewID else {
             throw ArrangementCoordinatorError.stalePreview
         }
+        if phase == .applying {
+            throw ArrangementCoordinatorError.applyAlreadyInProgress
+        }
+        guard phase == .ready else {
+            if phase == .awaitingSelection {
+                throw ArrangementCoordinatorError.previewNotReady
+            }
+            throw ArrangementCoordinatorError.applyUnavailable
+        }
 
-        let eligibility = try await pipeline.revalidatePreview(preview)
+        phase = .applying
+        let eligibility: ArrangementPreviewEligibility
+        do {
+            eligibility = try await pipeline.revalidatePreview(preview)
+        } catch {
+            phase = .ready
+            throw error
+        }
         let revalidatedPreview = preview.revalidated(as: eligibility)
         activePreview = revalidatedPreview
 
         guard eligibility == .ready else {
+            phase = .awaitingSelection
             throw ArrangementCoordinatorError.previewNotReady
         }
 
-        let result = try await pipeline.apply(revalidatedPreview)
+        let result: WorkspaceApplyResult
+        do {
+            result = try await pipeline.apply(revalidatedPreview)
+        } catch {
+            phase = .ready
+            throw error
+        }
+        lastResult = result
         canRollback = result.canRollback
+        phase = .result
         return result
     }
 
@@ -214,12 +395,50 @@ public actor ArrangementCoordinator {
             break
         }
 
-        guard canRollback else {
+        if phase == .restoring {
+            throw ArrangementCoordinatorError.restoreAlreadyInProgress
+        }
+        guard phase == .result, canRollback else {
             throw ArrangementCoordinatorError.rollbackUnavailable
         }
 
-        let summary = try await pipeline.rollback()
+        phase = .restoring
+        let summary: String
+        do {
+            summary = try await pipeline.rollback()
+        } catch {
+            phase = .result
+            throw error
+        }
         canRollback = false
+        activePreview = nil
+        lastResult = nil
+        phase = .idle
         return summary
+    }
+
+    private var isTransactionInProgress: Bool {
+        phase == .applying || phase == .restoring
+    }
+
+    private func phaseForEligibility(
+        _ eligibility: ArrangementPreviewEligibility
+    ) -> ArrangementCoordinatorPhase {
+        switch eligibility {
+        case .ready:
+            return .ready
+        case .blocked:
+            return .awaitingSelection
+        }
+    }
+
+    private func supersedePreparation() {
+        parsingTask?.cancel()
+        finishPreparation()
+    }
+
+    private func finishPreparation() {
+        parsingTask = nil
+        preparationID = nil
     }
 }
