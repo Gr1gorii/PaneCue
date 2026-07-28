@@ -277,7 +277,7 @@ private final class CommandLabCorrectionStore {
     }
 
     private let defaults: UserDefaults
-    private let key = "PaneCue.CommandLabCorrections.v1"
+    private let key = PaneCuePersistenceKey.commandCorrections
     private var corrections: [StoredCorrection]
 
     var count: Int {

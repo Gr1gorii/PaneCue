@@ -10,17 +10,16 @@ enum PaneCueDiagnostics {
         correctionCount: Int
     ) -> String {
         let bundle = Bundle.main
+        let identity = PaneCueReleaseIdentity(
+            infoDictionary: bundle.infoDictionary
+        )
         let profile = PaneCueReleaseProfile.current
         let report = Report(
             schemaVersion: 1,
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             application: ApplicationSummary(
-                version: bundle.object(
-                    forInfoDictionaryKey: "CFBundleShortVersionString"
-                ) as? String ?? "development",
-                build: bundle.object(
-                    forInfoDictionaryKey: "CFBundleVersion"
-                ) as? String ?? "development",
+                version: identity.version,
+                build: identity.build,
                 profile: profile.rawValue,
                 processing: profile.isExperimental
                     ? "User-selected experimental mode"

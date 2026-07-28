@@ -8,7 +8,7 @@ final class AIEngineSettingsStore: ObservableObject {
         didSet {
             defaults.set(
                 processingMode.rawValue,
-                forKey: Keys.processingMode
+                forKey: PaneCuePersistenceKey.processingMode
             )
             modeDidChange?(processingMode)
         }
@@ -18,7 +18,7 @@ final class AIEngineSettingsStore: ObservableObject {
         didSet {
             defaults.set(
                 localCommandModel.rawValue,
-                forKey: Keys.localCommandModel
+                forKey: PaneCuePersistenceKey.localCommandModel
             )
         }
     }
@@ -31,20 +31,19 @@ final class AIEngineSettingsStore: ObservableObject {
         self.defaults = defaults
         if PaneCueReleaseProfile.current.isExperimental {
             processingMode = AIProcessingMode(
-                rawValue: defaults.string(forKey: Keys.processingMode) ?? ""
+                rawValue: defaults.string(
+                    forKey: PaneCuePersistenceKey.processingMode
+                ) ?? ""
             ) ?? .automatic
             localCommandModel = LocalCommandModel(
-                rawValue: defaults.string(forKey: Keys.localCommandModel) ?? ""
+                rawValue: defaults.string(
+                    forKey: PaneCuePersistenceKey.localCommandModel
+                ) ?? ""
             ) ?? .smart
         } else {
             processingMode = .offline
             localCommandModel = .smart
         }
-    }
-
-    private enum Keys {
-        static let processingMode = "PaneCue.AIProcessingMode"
-        static let localCommandModel = "PaneCue.LocalCommandModel"
     }
 }
 
