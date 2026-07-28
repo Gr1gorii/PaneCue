@@ -25,6 +25,8 @@ assert_plist_absent() {
 
 echo "[1/6] Running automated acceptance and regression tests"
 swift test --package-path "${PROJECT_DIR}"
+swift build --package-path "${PROJECT_DIR}" --product PaneCue
+swift build --package-path "${PROJECT_DIR}" --product PaneCueExperimental
 
 echo "[2/6] Packaging the stable v0.2 development candidate"
 "${PROJECT_DIR}/scripts/package_app.sh"

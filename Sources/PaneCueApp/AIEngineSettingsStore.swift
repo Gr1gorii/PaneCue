@@ -3,8 +3,8 @@ import Foundation
 import PaneCueCore
 
 @MainActor
-final class AIEngineSettingsStore: ObservableObject {
-    @Published var processingMode: AIProcessingMode {
+public final class AIEngineSettingsStore: ObservableObject {
+    @Published public var processingMode: AIProcessingMode {
         didSet {
             defaults.set(
                 processingMode.rawValue,
@@ -14,7 +14,7 @@ final class AIEngineSettingsStore: ObservableObject {
         }
     }
 
-    @Published var localCommandModel: LocalCommandModel {
+    @Published public var localCommandModel: LocalCommandModel {
         didSet {
             defaults.set(
                 localCommandModel.rawValue,
@@ -23,11 +23,11 @@ final class AIEngineSettingsStore: ObservableObject {
         }
     }
 
-    var modeDidChange: ((AIProcessingMode) -> Void)?
+    public var modeDidChange: ((AIProcessingMode) -> Void)?
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if PaneCueReleaseProfile.current.isExperimental {
             processingMode = AIProcessingMode(

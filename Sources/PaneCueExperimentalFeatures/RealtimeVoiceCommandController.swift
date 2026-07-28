@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
+import PaneCueApp
 import PaneCueCore
 
 enum RealtimeVoiceCommandError: LocalizedError {
@@ -45,7 +46,7 @@ final class RealtimeVoiceCommandController {
     private let keyStore: OpenAIAPIKeyStore
     private let settings: AIEngineSettingsStore
     private let connectivity: ConnectivityMonitor
-    private let offlinePack: OfflinePackManager
+    private let offlinePack: ExperimentalOfflinePackManager
     private let recorder = MicrophoneRecorder()
     private let speechRecognizer = OnDeviceSpeechRecognizer()
     private let service = RealtimeCommandService()
@@ -58,7 +59,7 @@ final class RealtimeVoiceCommandController {
         keyStore: OpenAIAPIKeyStore,
         settings: AIEngineSettingsStore,
         connectivity: ConnectivityMonitor,
-        offlinePack: OfflinePackManager
+        offlinePack: ExperimentalOfflinePackManager
     ) {
         self.keyStore = keyStore
         self.settings = settings

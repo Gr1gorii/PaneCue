@@ -15,7 +15,6 @@ final class OfflinePackManager: ObservableObject {
 
     @Published private(set) var state: State = .checking
 
-    let service = OllamaLocalCommandService()
     private let miniService = PaneCueMiniCommandService()
 
     var isReady: Bool {
@@ -76,28 +75,19 @@ final class OfflinePackManager: ObservableObject {
         scenarios: [VoiceScenarioReference],
         model: LocalCommandModel
     ) async throws -> VoiceCommandIntent {
-        if model == .smart {
-            return try await miniService.intent(
-                transcript: transcript,
-                scenarios: scenarios
-            )
-        }
-        return try await service.intent(
+        return try await miniService.intent(
             transcript: transcript,
-            scenarios: scenarios,
-            selection: model
+            scenarios: scenarios
         )
     }
 
     func unloadModels() {
         Task {
             await miniService.unload()
-            await service.unloadRunningModels()
         }
     }
 
     func shutdown() async {
         await miniService.unload()
-        await service.shutdown()
     }
 }
