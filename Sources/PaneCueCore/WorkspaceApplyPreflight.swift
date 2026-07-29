@@ -7,6 +7,7 @@ public struct WorkspaceWindowInventoryItem: Hashable, Identifiable, Sendable {
     public let bundleIdentifier: String?
     public let applicationName: String
     public let role: ApplicationRole
+    public let display: ScenarioDisplayTarget
     public let isMinimized: Bool
     public let isFullScreen: Bool
     public let canSetFrame: Bool
@@ -16,6 +17,7 @@ public struct WorkspaceWindowInventoryItem: Hashable, Identifiable, Sendable {
         bundleIdentifier: String?,
         applicationName: String,
         role: ApplicationRole,
+        display: ScenarioDisplayTarget = .main,
         isMinimized: Bool = false,
         isFullScreen: Bool = false,
         canSetFrame: Bool = true
@@ -24,6 +26,7 @@ public struct WorkspaceWindowInventoryItem: Hashable, Identifiable, Sendable {
         self.bundleIdentifier = bundleIdentifier
         self.applicationName = applicationName
         self.role = role
+        self.display = display
         self.isMinimized = isMinimized
         self.isFullScreen = isFullScreen
         self.canSetFrame = canSetFrame

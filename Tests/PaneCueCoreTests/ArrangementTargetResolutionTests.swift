@@ -1,0 +1,246 @@
+import Testing
+@testable import PaneCueCore
+
+@Suite("Arrangement target resolution")
+struct ArrangementTargetResolutionTests {
+    @Test
+    func assignsOneFrozenStateToEverySlot() throws {
+        let specificApplication = ScenarioApplication(
+            bundleIdentifier: "com.example.Editor",
+            displayName: "Editor"
+        )
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(application: specificApplication),
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .documentation),
+                ScenarioWindowTarget(role: .notes)
+            ]
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item(
+                    "editor-window",
+                    role: .ide,
+                    bundleIdentifier: "com.example.Editor"
+                ),
+                item("browser-one", role: .browser),
+                item("browser-two", role: .browser),
+                item("notes-window", role: .notes, isFullScreen: true)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(resolution.slots.count == scenario.windows.count)
+        guard case let .resolved(target) = resolution.slots[0].state else {
+            Issue.record("Specific application did not resolve")
+            return
+        }
+        #expect(target.bundleIdentifier == "com.example.Editor")
+        #expect(target.matchReason == .specificApplication)
+        #expect(
+            resolution.slots[1].state
+                == .ambiguous(candidateCount: 2)
+        )
+        #expect(resolution.slots[2].state == .missing)
+        #expect(
+            resolution.slots[3].state
+                == .unsupported(.fullScreen)
+        )
+        #expect(!resolution.isReadyForApply)
+    }
+
+    @Test
+    func resolvedTargetCarriesOnlyTheFrozenLocalMetadata() throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = try #require(scenario.windows.first?.id)
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item(
+                    "temporary-window-7",
+                    role: .browser,
+                    bundleIdentifier: "com.example.Browser",
+                    applicationName: "Browser",
+                    display: .external
+                )
+            ],
+            hasExternalDisplay: true,
+            hasActiveCall: false
+        )
+
+        let slot = try #require(resolution[slotID])
+        guard case let .resolved(target) = slot.state else {
+            Issue.record("Browser target did not resolve")
+            return
+        }
+
+        #expect(target.bundleIdentifier == "com.example.Browser")
+        #expect(target.windowIdentifier.rawValue == "temporary-window-7")
+        #expect(target.display == .external)
+        #expect(target.matchReason == .matchedRole(.browser))
+        #expect(target.localizedApplicationName == "Browser")
+        #expect(resolution.isReadyForApply)
+
+        let storedFields = Set(
+            Mirror(reflecting: target).children.compactMap(\.label)
+        )
+        #expect(
+            storedFields == [
+                "bundleIdentifier",
+                "windowIdentifier",
+                "display",
+                "matchReason",
+                "localizedApplicationName"
+            ]
+        )
+    }
+
+    @Test
+    func candidateWithoutBundleIdentifierIsUnsupported() {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .notes)]
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item(
+                    "notes-window",
+                    role: .notes,
+                    bundleIdentifier: nil
+                )
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(
+            resolution.slots.first?.state
+                == .unsupported(.missingBundleIdentifier)
+        )
+        #expect(!resolution.isReadyForApply)
+    }
+
+    @Test
+    func mapsEveryExistingBlockerToUnsupported() {
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(role: .ide),
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .notes)
+            ]
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("ide", role: .ide, isMinimized: true),
+                item("browser", role: .browser, canSetFrame: false),
+                item("notes", role: .notes, isFullScreen: true)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(
+            resolution.slots.map(\.state) == [
+                .unsupported(.minimized),
+                .unsupported(.unchangeable),
+                .unsupported(.fullScreen)
+            ]
+        )
+    }
+
+    @Test
+    func mapsUnavailableExternalDisplayToUnsupported() {
+        let scenario = CustomScenario(
+            name: "External Display Fixture",
+            windows: [
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .browser),
+                    gridRect: .left,
+                    display: .external
+                )
+            ]
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("browser", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(
+            resolution.slots.first?.state
+                == ArrangementTargetResolutionState.unsupported(
+                    .externalDisplayUnavailable
+                )
+        )
+    }
+
+    @Test
+    func mapsUnmetScenarioConditionToUnsupported() {
+        let scenario = CustomScenario(
+            name: "Call Condition Fixture",
+            windows: [
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .meeting),
+                    gridRect: .left
+                )
+            ],
+            conditions: ScenarioConditions(onlyDuringCall: true)
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("meeting", role: .meeting)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(
+            resolution.slots.first?.state
+                == ArrangementTargetResolutionState.unsupported(
+                    .conditionNotMet
+                )
+        )
+    }
+
+    private func makeScenario(
+        targets: [ScenarioWindowTarget]
+    ) -> CustomScenario {
+        CustomScenario(
+            name: "Resolution Fixture",
+            windows: zip(
+                targets,
+                WorkspacePlan.balancedRects(count: targets.count)
+            ).map { target, rect in
+                ScenarioWindowSlot(target: target, gridRect: rect)
+            }
+        )
+    }
+
+    private func item(
+        _ id: String,
+        role: ApplicationRole,
+        bundleIdentifier: String? = "com.example.Application",
+        applicationName: String = "Application",
+        display: ScenarioDisplayTarget = .main,
+        isMinimized: Bool = false,
+        isFullScreen: Bool = false,
+        canSetFrame: Bool = true
+    ) -> WorkspaceWindowInventoryItem {
+        WorkspaceWindowInventoryItem(
+            id: id,
+            bundleIdentifier: bundleIdentifier,
+            applicationName: applicationName,
+            role: role,
+            display: display,
+            isMinimized: isMinimized,
+            isFullScreen: isFullScreen,
+            canSetFrame: canSetFrame
+        )
+    }
+}
