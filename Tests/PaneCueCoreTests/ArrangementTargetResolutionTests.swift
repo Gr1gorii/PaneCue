@@ -106,6 +106,62 @@ struct ArrangementTargetResolutionTests {
     }
 
     @Test
+    func exposesTheFiveFrozenMatchReasonDescriptionsWithoutConfidence() {
+        let reasons: [ArrangementTargetMatchReason] = [
+            .specificApplication,
+            .matchedRole(.browser),
+            .selectedByUser,
+            .onlyMatchingWindow,
+            .savedCueMapping
+        ]
+
+        #expect(
+            reasons.map(\.shortDescription) == [
+                "Specific application",
+                "Matched role: Browser",
+                "Selected by you",
+                "Only matching window",
+                "Saved Cue mapping"
+            ]
+        )
+        #expect(
+            reasons.allSatisfy {
+                !$0.shortDescription.contains("%")
+                    && !$0.shortDescription
+                        .localizedCaseInsensitiveContains("confidence")
+            }
+        )
+    }
+
+    @Test
+    func savedCueSourceAttributesEveryResolvedSlotToItsMapping() throws {
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .notes)
+            ]
+        )
+        let resolution = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("browser-window", role: .browser),
+                item("notes-window", role: .notes)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false,
+            requestSource: .savedCue
+        )
+
+        let reasons = try resolution.slots.map { slot in
+            guard case let .resolved(target) = slot.state else {
+                throw MatchReasonFixtureError.unresolvedSlot
+            }
+            return target.matchReason
+        }
+        #expect(reasons == [.savedCueMapping, .savedCueMapping])
+    }
+
+    @Test
     func candidateWithoutBundleIdentifierIsUnsupported() {
         let scenario = makeScenario(
             targets: [ScenarioWindowTarget(role: .notes)]
@@ -356,4 +412,8 @@ struct ArrangementTargetResolutionTests {
             canSetFrame: canSetFrame
         )
     }
+}
+
+private enum MatchReasonFixtureError: Error {
+    case unresolvedSlot
 }

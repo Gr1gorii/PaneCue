@@ -22,6 +22,42 @@ public enum ArrangementTargetMatchReason: Hashable, Sendable {
     case selectedByUser
     case onlyMatchingWindow
     case savedCueMapping
+
+    /// Short, deterministic Preview copy. Deliberately contains no confidence
+    /// score because target matching is not calibrated as a probability.
+    public var shortDescription: String {
+        switch self {
+        case .specificApplication:
+            return "Specific application"
+        case let .matchedRole(role):
+            return "Matched role: \(role.matchReasonName)"
+        case .selectedByUser:
+            return "Selected by you"
+        case .onlyMatchingWindow:
+            return "Only matching window"
+        case .savedCueMapping:
+            return "Saved Cue mapping"
+        }
+    }
+}
+
+private extension ApplicationRole {
+    var matchReasonName: String {
+        switch self {
+        case .ide:
+            return "IDE"
+        case .meeting:
+            return "Meeting"
+        case .browser:
+            return "Browser"
+        case .notes:
+            return "Notes"
+        case .documentation:
+            return "Documentation"
+        case .other:
+            return "Other"
+        }
+    }
 }
 
 /// Privacy-safe metadata for the exact window selected for a Preview slot.
@@ -282,6 +318,7 @@ public enum WorkspaceTargetResolver {
         inventory: [WorkspaceWindowInventoryItem],
         hasExternalDisplay: Bool,
         hasActiveCall: Bool,
+        requestSource: ArrangementRequestSource = .arrange,
         localDifferentiators: [EphemeralWindowIdentifier: String] = [:]
     ) -> ArrangementTargetResolutionSet {
         let inventoryByID = inventory.reduce(into: [:]) { result, item in
@@ -304,7 +341,8 @@ public enum WorkspaceTargetResolver {
                     state: state(
                         for: decision,
                         slot: slotsByID[decision.id],
-                        inventoryByID: inventoryByID
+                        inventoryByID: inventoryByID,
+                        requestSource: requestSource
                     ),
                     candidates: decision.candidateIDs.compactMap {
                         candidate(
@@ -320,7 +358,8 @@ public enum WorkspaceTargetResolver {
     private static func state(
         for decision: WorkspaceApplyPreflightDecision,
         slot: ScenarioWindowSlot?,
-        inventoryByID: [String: WorkspaceWindowInventoryItem]
+        inventoryByID: [String: WorkspaceWindowInventoryItem],
+        requestSource: ArrangementRequestSource
     ) -> ArrangementTargetResolutionState {
         switch decision.status {
         case let .ready(candidateID):
@@ -338,7 +377,10 @@ public enum WorkspaceTargetResolver {
                         rawValue: candidate.id
                     ),
                     display: candidate.display,
-                    matchReason: matchReason(for: slot.target),
+                    matchReason: matchReason(
+                        for: slot.target,
+                        requestSource: requestSource
+                    ),
                     localizedApplicationName: candidate.applicationName
                 )
             )
@@ -361,8 +403,12 @@ public enum WorkspaceTargetResolver {
     }
 
     private static func matchReason(
-        for target: ScenarioWindowTarget
+        for target: ScenarioWindowTarget,
+        requestSource: ArrangementRequestSource
     ) -> ArrangementTargetMatchReason {
+        if requestSource == .savedCue {
+            return .savedCueMapping
+        }
         switch target.kind {
         case .application:
             return .specificApplication

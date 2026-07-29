@@ -253,6 +253,9 @@ struct CommandLabView: View {
                                 self.didRollback = false
                             }
                     ),
+                    resolution: candidatePreview(
+                        for: workspacePlan
+                    )?.resolution,
                     applications: model.applications,
                     canUndo: !planHistory.isEmpty,
                     onBeginChange: { previous in
@@ -865,6 +868,12 @@ private struct ArrangementCandidateChooser: View {
                         systemImage: "exclamationmark.circle.fill"
                     )
                     .foregroundStyle(.orange)
+                } else if let reason = matchReason(for: slot.state) {
+                    Label(
+                        reason.shortDescription,
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.green)
                 } else {
                     Label("Selected", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
@@ -1030,6 +1039,15 @@ private struct ArrangementCandidateChooser: View {
             return true
         }
         return false
+    }
+
+    private func matchReason(
+        for state: ArrangementTargetResolutionState
+    ) -> ArrangementTargetMatchReason? {
+        guard case let .resolved(target) = state else {
+            return nil
+        }
+        return target.matchReason
     }
 }
 

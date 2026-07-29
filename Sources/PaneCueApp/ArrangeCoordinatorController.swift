@@ -6,7 +6,7 @@ import PaneCueCore
 @MainActor
 final class ArrangeCoordinatorController {
     typealias ResolutionExecution = @MainActor @Sendable
-        (WorkspacePlan) async throws -> ArrangementTargetResolutionSet
+        (ArrangementDraft) async throws -> ArrangementTargetResolutionSet
     typealias ApplyExecution = @MainActor @Sendable
         (
             WorkspacePlan,
@@ -26,7 +26,7 @@ final class ArrangeCoordinatorController {
             pipeline: ArrangementCoordinatorPipeline(
                 preparePreview: { draft in
                     if let resolve {
-                        let resolution = try await resolve(draft.plan)
+                        let resolution = try await resolve(draft)
                         return ArrangementPreviewPreparation(
                             resolution: resolution,
                             isPlanValid: draft.plan.windows.count >= 2
@@ -69,14 +69,19 @@ final class ArrangeCoordinatorController {
     ) async throws -> CommandLabAnalysis {
         switch analysis {
         case let .plan(plan, summary):
-            let preview = try await prepare(plan)
+            let preview = try await prepare(plan, source: .arrange)
             return .plan(preview.plan, summary: summary)
         case let .action(intent):
             if let plan = WorkspacePlan.from(
                 intent: intent,
                 scenarios: savedScenarios
             ) {
-                let preview = try await prepare(plan)
+                let preview = try await prepare(
+                    plan,
+                    source: intent.action == .applyCustomScenario
+                        ? .savedCue
+                        : .arrange
+                )
                 return .plan(
                     preview.plan,
                     summary: "Created a workspace plan"
@@ -109,7 +114,7 @@ final class ArrangeCoordinatorController {
                     plan: plan
                 )
         } else {
-            preview = try await prepare(plan)
+            preview = try await prepare(plan, source: .arrange)
         }
         return try await coordinator.apply(
             previewID: preview.id,
@@ -136,7 +141,11 @@ final class ArrangeCoordinatorController {
     func preparePlan(
         _ plan: WorkspacePlan
     ) async throws -> ArrangementPreview {
-        try await prepare(plan)
+        let current = await coordinator.currentPreview()
+        let source = current?.id == plan.id
+            ? current?.source ?? .arrange
+            : .arrange
+        return try await prepare(plan, source: source)
     }
 
     func selectCandidate(
@@ -152,11 +161,12 @@ final class ArrangeCoordinatorController {
     }
 
     private func prepare(
-        _ plan: WorkspacePlan
+        _ plan: WorkspacePlan,
+        source: ArrangementRequestSource
     ) async throws -> ArrangementPreview {
         try await coordinator.preparePreview(
             id: plan.id,
-            source: .arrange,
+            source: source,
             makeDraft: { plan }
         )
     }

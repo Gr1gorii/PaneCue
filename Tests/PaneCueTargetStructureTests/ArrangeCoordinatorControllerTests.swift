@@ -78,6 +78,80 @@ struct ArrangeCoordinatorControllerTests {
     }
 
     @Test
+    func savedCuePreviewUsesSavedCueMappingReasons() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let savedCue = CustomScenario(
+            name: "Focus Cue",
+            windows: [
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .browser),
+                    gridRect: .left
+                ),
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .notes),
+                    gridRect: .right
+                )
+            ]
+        )
+        let controller = ArrangeCoordinatorController(
+            resolve: { draft in
+                WorkspaceTargetResolver.resolve(
+                    scenario: CustomScenario(
+                        name: draft.plan.name,
+                        windows: draft.plan.windows
+                    ),
+                    inventory: [
+                        WorkspaceWindowInventoryItem(
+                            id: "browser-window",
+                            bundleIdentifier: "com.example.Browser",
+                            applicationName: "Browser",
+                            role: .browser
+                        ),
+                        WorkspaceWindowInventoryItem(
+                            id: "notes-window",
+                            bundleIdentifier: "com.example.Notes",
+                            applicationName: "Notes",
+                            role: .notes
+                        )
+                    ],
+                    hasExternalDisplay: false,
+                    hasActiveCall: false,
+                    requestSource: draft.source
+                )
+            },
+            apply: { plan, _ in
+                await recorder.recordApply()
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .action(
+                VoiceCommandIntent(
+                    action: .applyCustomScenario,
+                    arguments: ["scenario_name": savedCue.name]
+                )
+            ),
+            savedScenarios: [savedCue]
+        )
+
+        let preview = try #require(
+            (await controller.currentState()).preview
+        )
+        #expect(preview.source == .savedCue)
+        let reasons = try #require(preview.resolution).slots.compactMap {
+            slot -> ArrangementTargetMatchReason? in
+            guard case let .resolved(target) = slot.state else {
+                return nil
+            }
+            return target.matchReason
+        }
+        #expect(reasons == [.savedCueMapping, .savedCueMapping])
+        #expect(await recorder.applyCount() == 0)
+    }
+
+    @Test
     func oneWindowDraftKeepsTheExistingApplyError() async throws {
         let recorder = ArrangeExecutionRecorder()
         let controller = makeController(recorder: recorder)

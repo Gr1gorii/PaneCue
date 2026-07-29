@@ -236,7 +236,8 @@ public final class WindowManager {
     /// Window titles are passed only as in-memory chooser differentiators and
     /// are never logged or persisted by PaneCue Core.
     public func previewResolution(
-        for plan: WorkspacePlan
+        for plan: WorkspacePlan,
+        requestSource: ArrangementRequestSource = .arrange
     ) throws -> ArrangementTargetResolutionSet {
         let windows = try eligibleWindows()
         let inventoryPairs = workspaceInventory(from: windows)
@@ -262,6 +263,7 @@ public final class WindowManager {
             hasActiveCall: windows.contains {
                 role(of: $0) == .meeting
             },
+            requestSource: requestSource,
             localDifferentiators: differentiators
         )
     }
