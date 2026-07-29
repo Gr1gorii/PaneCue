@@ -16,6 +16,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let voiceHUD = VoiceCommandHUDController()
     private let appIconController = PaneCueAppIconController()
     private let terminationCoordinator = PaneCueTerminationCoordinator()
+    private lazy var arrangeCoordinator = ArrangeCoordinatorController(
+        apply: { [weak self] plan in
+            guard let self else {
+                throw CommandLabError.unavailable
+            }
+            return try await executeArrangeApply(plan)
+        },
+        rollback: { [weak self] in
+            guard let self else {
+                throw CommandLabError.unavailable
+            }
+            return try await executeArrangeRollback()
+        }
+    )
     private lazy var mainWindow = MainWindowController(
         store: customScenarioStore,
         featureProvider: featureProvider,
@@ -60,17 +74,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.rebuildCustomScenariosMenu()
                 self?.configureCustomScenarioHotKeys()
             },
+            beginArrangement: { [weak self] in
+                guard let self else {
+                    return
+                }
+                Task { @MainActor in
+                    await arrangeCoordinator.beginEditing()
+                }
+            },
+            discardArrangement: { [weak self] in
+                guard let self else {
+                    return
+                }
+                Task { @MainActor in
+                    await arrangeCoordinator.discard()
+                }
+            },
             analyzeCommand: {
                 [weak self] transcript, currentPlan in
                 guard let self else {
                     throw CommandLabError.unavailable
                 }
-                return try await commandLab.analyze(
+                let analysis = try await commandLab.analyze(
                     transcript: transcript,
                     currentPlan: currentPlan,
                     scenarios: voiceScenarioReferences,
                     savedScenarios: customScenarioStore.scenarios,
                     offlinePack: offlinePack
+                )
+                return try await arrangeCoordinator.prepare(
+                    analysis,
+                    savedScenarios: customScenarioStore.scenarios
                 )
             },
             applyAnalyzedCommand: { [weak self] intent in
@@ -89,34 +123,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return summary
             },
             applyWorkspacePlan: { [weak self] plan in
-                guard let self,
-                      let scenario = plan.scenario(
-                          named: "Arrange"
-                      ) else {
-                    throw PaneCueWindowError.operationFailed(
-                        details: "Add at least two windows before applying this plan."
-                    )
+                guard let self else {
+                    throw CommandLabError.unavailable
                 }
-                try ensureAccessibilityForApply()
-                beginUserInitiatedScenario()
-                await featureProvider.stopVideoCapture()
-                try await applicationLauncher.ensureApplications(
-                    for: scenario
-                )
-                let result = try windowManager.applyCustomLayoutDetailed(
-                    scenario
-                )
-                updateMenuState(message: result.summary)
-                return result
+                return try await arrangeCoordinator.apply(plan)
             },
             rollbackWorkspace: { [weak self] in
                 guard let self else {
                     throw CommandLabError.unavailable
                 }
-                let summary = try await restoreWorkspace()
-                updateMenuState(message: summary)
-                featureProvider.autoModeWorkspaceMayHaveChanged()
-                return summary
+                return try await arrangeCoordinator.rollback()
             },
             saveCommandCorrection: {
                 [weak self] transcript, intent in
@@ -1035,6 +1051,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for: effectiveScenario
         )
         return try windowManager.applyCustomLayout(effectiveScenario)
+    }
+
+    private func executeArrangeApply(
+        _ plan: WorkspacePlan
+    ) async throws -> WorkspaceApplyResult {
+        guard let scenario = plan.scenario(named: "Arrange") else {
+            throw PaneCueWindowError.operationFailed(
+                details: "Add at least two windows before applying this plan."
+            )
+        }
+        try ensureAccessibilityForApply()
+        beginUserInitiatedScenario()
+        await featureProvider.stopVideoCapture()
+        try await applicationLauncher.ensureApplications(for: scenario)
+        let result = try windowManager.applyCustomLayoutDetailed(scenario)
+        updateMenuState(message: result.summary)
+        return result
+    }
+
+    private func executeArrangeRollback() async throws -> String {
+        let summary = try await restoreWorkspace()
+        updateMenuState(message: summary)
+        featureProvider.autoModeWorkspaceMayHaveChanged()
+        return summary
     }
 
     private func ensureAccessibilityForApply() throws {

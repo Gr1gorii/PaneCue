@@ -40,6 +40,7 @@ struct CommandLabView: View {
                 model.cancelCommandLabListening()
                 isListening = false
             }
+            model.discardArrangementPreview()
         }
     }
 
@@ -144,6 +145,7 @@ struct CommandLabView: View {
                         errorMessage = nil
                         applyResult = nil
                         didRollback = false
+                        model.discardArrangementPreview()
                     }
                     .buttonStyle(.borderless)
                 }
@@ -278,6 +280,7 @@ struct CommandLabView: View {
                         self.analyzedIntent = nil
                         self.planHistory = []
                         feedback = "Saved as No Action"
+                        model.discardArrangementPreview()
                     }
                 )
                 .frame(width: 315)
@@ -309,6 +312,7 @@ struct CommandLabView: View {
                     feedback = ""
                     applyResult = nil
                     didRollback = false
+                    model.discardArrangementPreview()
                 }
                 .buttonStyle(.bordered)
 
@@ -368,6 +372,7 @@ struct CommandLabView: View {
                         )
                         self.analyzedIntent = nil
                         feedback = "Saved as No Action"
+                        model.discardArrangementPreview()
                     }
                 )
                 .frame(width: 300)
@@ -389,6 +394,7 @@ struct CommandLabView: View {
                     feedback = ""
                     applyResult = nil
                     didRollback = false
+                    model.discardArrangementPreview()
                 }
                 .buttonStyle(.bordered)
 
