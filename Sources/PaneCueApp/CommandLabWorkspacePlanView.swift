@@ -104,6 +104,7 @@ struct CommandLabPlanCanvas: View {
         let targetState = resolution?[window.id]?.state
         let needsSelection = isAmbiguous(targetState)
         let userSelection = selectedTarget(targetState)
+        let resolvedTarget = resolvedTarget(targetState)
 
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -154,14 +155,19 @@ struct CommandLabPlanCanvas: View {
                     )
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.orange)
-                } else if let userSelection, height > 88 {
+                } else if let resolvedTarget, height > 88 {
                     Label(
-                        userSelection.localizedApplicationName,
-                        systemImage: "checkmark.circle.fill"
+                        resolvedTarget.matchReason.shortDescription,
+                        systemImage:
+                            resolvedTarget.matchReason.previewSystemImage
                     )
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .lineLimit(1)
+                    .foregroundStyle(
+                        userSelection == nil
+                            ? .white.opacity(0.72)
+                            : .green
+                    )
+                    .lineLimit(2)
                 }
                 Spacer(minLength: 0)
             }
@@ -352,6 +358,15 @@ struct CommandLabPlanCanvas: View {
         return target
     }
 
+    private func resolvedTarget(
+        _ state: ArrangementTargetResolutionState?
+    ) -> ResolvedArrangementTarget? {
+        guard case let .resolved(target) = state else {
+            return nil
+        }
+        return target
+    }
+
     private func handlePoint(
         _ handle: ScenarioGridResizeHandle,
         in size: CGSize
@@ -388,6 +403,7 @@ struct CommandLabPlanCanvas: View {
 
 struct CommandLabPlanInspector: View {
     @Binding var plan: WorkspacePlan
+    let resolution: ArrangementTargetResolutionSet?
     let applications: [InstalledApplication]
     let canUndo: Bool
     let onBeginChange: (WorkspacePlan) -> Void
@@ -470,6 +486,7 @@ struct CommandLabPlanInspector: View {
                     Array(plan.windows.enumerated()),
                     id: \.element.id
                 ) { index, window in
+                    let matchReason = matchReason(for: window.id)
                     Button {
                         plan.selectedWindowID = window.id
                     } label: {
@@ -481,8 +498,20 @@ struct CommandLabPlanInspector: View {
                                     Color.indigo.opacity(0.16),
                                     in: Circle()
                                 )
-                            Text(window.target.displayName)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(window.target.displayName)
+                                    .lineLimit(1)
+                                if let matchReason {
+                                    Label(
+                                        matchReason.shortDescription,
+                                        systemImage:
+                                            matchReason.previewSystemImage
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                }
+                            }
                             Spacer()
                             if plan.selectedWindowID == window.id {
                                 Image(systemName: "checkmark.circle.fill")
@@ -493,6 +522,13 @@ struct CommandLabPlanInspector: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 4)
+                    .accessibilityLabel(
+                        accessibilityLabel(
+                            for: window,
+                            index: index,
+                            matchReason: matchReason
+                        )
+                    )
                 }
             }
         }
@@ -609,6 +645,27 @@ struct CommandLabPlanInspector: View {
 
     private var selectedIndex: Int? {
         plan.selectedWindowIndex
+    }
+
+    private func matchReason(
+        for slotID: UUID
+    ) -> ArrangementTargetMatchReason? {
+        guard case let .resolved(target) = resolution?[slotID]?.state else {
+            return nil
+        }
+        return target.matchReason
+    }
+
+    private func accessibilityLabel(
+        for window: ScenarioWindowSlot,
+        index: Int,
+        matchReason: ArrangementTargetMatchReason?
+    ) -> String {
+        let prefix = "\(index + 1), \(window.target.displayName)"
+        guard let matchReason else {
+            return prefix
+        }
+        return "\(prefix), \(matchReason.shortDescription)"
     }
 
     private var selectedTargetKey: Binding<String> {
@@ -748,6 +805,23 @@ struct CommandLabPlanInspector: View {
             return "app:\(target.application?.bundleIdentifier ?? "")"
         case .role:
             return "role:\(target.role?.rawValue ?? "other")"
+        }
+    }
+}
+
+private extension ArrangementTargetMatchReason {
+    var previewSystemImage: String {
+        switch self {
+        case .specificApplication:
+            return "app.badge.checkmark"
+        case .matchedRole:
+            return "person.crop.rectangle.stack"
+        case .selectedByUser:
+            return "hand.tap.fill"
+        case .onlyMatchingWindow:
+            return "1.circle.fill"
+        case .savedCueMapping:
+            return "square.grid.3x3.fill"
         }
     }
 }

@@ -17,11 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let appIconController = PaneCueAppIconController()
     private let terminationCoordinator = PaneCueTerminationCoordinator()
     private lazy var arrangeCoordinator = ArrangeCoordinatorController(
-        resolve: { [weak self] plan in
+        resolve: { [weak self] draft in
             guard let self else {
                 throw CommandLabError.unavailable
             }
-            return try windowManager.previewResolution(for: plan)
+            return try windowManager.previewResolution(
+                for: draft.plan,
+                requestSource: draft.source
+            )
         },
         apply: { [weak self] plan, resolution in
             guard let self else {
