@@ -217,6 +217,91 @@ struct ArrangementCoordinatorStateMachineTests {
     }
 
     @Test
+    func changedCandidateSetReturnsPreviewToSelectionBeforeMutation()
+        async throws {
+        let mutationCount = AsyncCounter()
+        let plan = makeStateMachinePlan()
+        let initial = ArrangementTargetResolutionSet(
+            slots: plan.windows.enumerated().map { index, slot in
+                ArrangementSlotResolution(
+                    id: slot.id,
+                    state: .resolved(
+                        ResolvedArrangementTarget(
+                            bundleIdentifier: "com.example.App\(index)",
+                            windowIdentifier: EphemeralWindowIdentifier(
+                                rawValue: "window-\(index)"
+                            ),
+                            display: .main,
+                            matchReason: .onlyMatchingWindow,
+                            localizedApplicationName: "Application \(index)"
+                        )
+                    )
+                )
+            }
+        )
+        let replacement = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "replacement-window"
+            ),
+            bundleIdentifier: "com.example.App0",
+            display: .main,
+            localizedApplicationName: "Application 0"
+        )
+        let revalidated = ArrangementTargetResolutionSet(
+            slots: [
+                ArrangementSlotResolution(
+                    id: plan.windows[0].id,
+                    state: .ambiguous(candidateCount: 1),
+                    candidates: [replacement],
+                    frozenWindowIdentifier: EphemeralWindowIdentifier(
+                        rawValue: "window-0"
+                    )
+                ),
+                initial.slots[1]
+            ]
+        )
+        let coordinator = ArrangementCoordinator(
+            pipeline: ArrangementCoordinatorPipeline(
+                preparePreview: { _ in
+                    ArrangementPreviewPreparation(resolution: initial)
+                },
+                revalidatePreview: { _ in
+                    ArrangementPreviewPreparation(
+                        resolution: revalidated
+                    )
+                },
+                apply: { preview in
+                    await mutationCount.increment()
+                    return makeStateMachineResult(for: preview)
+                },
+                rollback: { "Layout restored" }
+            )
+        )
+        let preview = try await coordinator.preparePreview(
+            source: .arrange,
+            makeDraft: { plan }
+        )
+
+        do {
+            _ = try await coordinator.apply(
+                previewID: preview.id,
+                authority: .directUserAction
+            )
+            Issue.record("Changed candidates crossed the mutation boundary")
+        } catch let error as ArrangementCoordinatorError {
+            #expect(error == .previewNotReady)
+        }
+
+        let state = await coordinator.currentState()
+        #expect(state.phase == .awaitingSelection)
+        #expect(
+            state.preview?.resolution?[plan.windows[0].id]?.state
+                == .ambiguous(candidateCount: 1)
+        )
+        #expect(await mutationCount.value() == 0)
+    }
+
+    @Test
     func newerRequestCancelsObsoleteParsing() async throws {
         let oldParseStarted = AsyncGate()
         let oldParseCancelled = AsyncGate()

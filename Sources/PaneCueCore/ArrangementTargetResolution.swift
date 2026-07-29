@@ -150,15 +150,27 @@ public struct ArrangementSlotResolution: Hashable, Identifiable, Sendable {
     public let id: UUID
     public let state: ArrangementTargetResolutionState
     public let candidates: [ArrangementTargetCandidate]
+    /// The exact Preview window that Apply must continue to require. This pin
+    /// survives a missing or unsupported revalidation state so Apply cannot
+    /// silently substitute another matching window.
+    public let frozenWindowIdentifier: EphemeralWindowIdentifier?
 
     public init(
         id: UUID,
         state: ArrangementTargetResolutionState,
-        candidates: [ArrangementTargetCandidate] = []
+        candidates: [ArrangementTargetCandidate] = [],
+        frozenWindowIdentifier: EphemeralWindowIdentifier? = nil
     ) {
         self.id = id
         self.state = state
         self.candidates = candidates
+        if let frozenWindowIdentifier {
+            self.frozenWindowIdentifier = frozenWindowIdentifier
+        } else if case let .resolved(target) = state {
+            self.frozenWindowIdentifier = target.windowIdentifier
+        } else {
+            self.frozenWindowIdentifier = nil
+        }
     }
 }
 
@@ -213,11 +225,89 @@ public struct ArrangementTargetResolutionSet: Hashable, Sendable {
 
     public var selectedCandidateIDsBySlot: [UUID: String] {
         slots.reduce(into: [:]) { result, slot in
-            guard case let .resolved(target) = slot.state else {
+            guard let identifier = slot.frozenWindowIdentifier else {
                 return
             }
-            result[slot.id] = target.windowIdentifier.rawValue
+            result[slot.id] = identifier.rawValue
         }
+    }
+
+    /// Rechecks every frozen exact target against a fresh local inventory.
+    /// Replacement candidates remain visible for explicit selection but are
+    /// never promoted to resolved automatically.
+    public func revalidating(
+        against fresh: ArrangementTargetResolutionSet
+    ) -> ArrangementTargetResolutionSet {
+        ArrangementTargetResolutionSet(
+            slots: slots.map { previousSlot in
+                guard case let .resolved(previousTarget) =
+                    previousSlot.state else {
+                    return fresh[previousSlot.id]
+                        ?? ArrangementSlotResolution(
+                            id: previousSlot.id,
+                            state: .missing,
+                            frozenWindowIdentifier:
+                                previousSlot.frozenWindowIdentifier
+                        )
+                }
+                guard let freshSlot = fresh[previousSlot.id] else {
+                    return invalidatedSlot(
+                        previousSlot,
+                        candidates: []
+                    )
+                }
+                guard let exactCandidate = freshSlot.candidates.first(
+                    where: {
+                        $0.id == previousTarget.windowIdentifier
+                    }
+                ) else {
+                    return invalidatedSlot(
+                        previousSlot,
+                        candidates: freshSlot.candidates
+                    )
+                }
+
+                if let unsupportedReason = exactCandidate.unsupportedReason {
+                    return ArrangementSlotResolution(
+                        id: previousSlot.id,
+                        state: .unsupported(unsupportedReason),
+                        candidates: freshSlot.candidates,
+                        frozenWindowIdentifier:
+                            previousTarget.windowIdentifier
+                    )
+                }
+                guard exactCandidate.bundleIdentifier
+                        == previousTarget.bundleIdentifier,
+                      exactCandidate.display == previousTarget.display else {
+                    return invalidatedSlot(
+                        previousSlot,
+                        candidates: freshSlot.candidates
+                    )
+                }
+
+                return ArrangementSlotResolution(
+                    id: previousSlot.id,
+                    state: .resolved(previousTarget),
+                    candidates: freshSlot.candidates,
+                    frozenWindowIdentifier:
+                        previousTarget.windowIdentifier
+                )
+            }
+        )
+    }
+
+    private func invalidatedSlot(
+        _ previousSlot: ArrangementSlotResolution,
+        candidates: [ArrangementTargetCandidate]
+    ) -> ArrangementSlotResolution {
+        ArrangementSlotResolution(
+            id: previousSlot.id,
+            state: candidates.isEmpty
+                ? .missing
+                : .ambiguous(candidateCount: candidates.count),
+            candidates: candidates,
+            frozenWindowIdentifier: previousSlot.frozenWindowIdentifier
+        )
     }
 
     public func selecting(

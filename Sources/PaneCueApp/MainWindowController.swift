@@ -325,12 +325,17 @@ final class PaneCueDashboardModel: ObservableObject {
     func applyWorkspacePlan(
         _ plan: WorkspacePlan
     ) async throws -> WorkspaceApplyResult {
-        let result = try await actions.applyWorkspacePlan(plan)
-        arrangementPreview = await actions.arrangementState()?.preview
-        if result.didChangeAnyWindow {
-            completeTextOnboarding()
+        do {
+            let result = try await actions.applyWorkspacePlan(plan)
+            arrangementPreview = await actions.arrangementState()?.preview
+            if result.didChangeAnyWindow {
+                completeTextOnboarding()
+            }
+            return result
+        } catch {
+            arrangementPreview = await actions.arrangementState()?.preview
+            throw error
         }
-        return result
     }
 
     func rollbackLastApply() async throws -> String {

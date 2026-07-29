@@ -162,6 +162,188 @@ struct ArrangementTargetResolutionTests {
     }
 
     @Test
+    func revalidationNeverSubstitutesAReplacementCandidate() throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = try #require(scenario.windows.first?.id)
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("original-window", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("replacement-window", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        let revalidated = initial.revalidating(against: fresh)
+
+        #expect(
+            revalidated[slotID]?.state == .ambiguous(candidateCount: 1)
+        )
+        #expect(
+            revalidated[slotID]?.candidates.map(\.id.rawValue)
+                == ["replacement-window"]
+        )
+        #expect(
+            revalidated[slotID]?.frozenWindowIdentifier?.rawValue
+                == "original-window"
+        )
+        #expect(
+            revalidated.selectedCandidateIDsBySlot[slotID]
+                == "original-window"
+        )
+        #expect(revalidated.requiresCandidateSelection)
+    }
+
+    @Test
+    func revalidationMarksTheSlotMissingWhenTheExactWindowDisappears()
+        throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .notes)]
+        )
+        let slotID = try #require(scenario.windows.first?.id)
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("notes-window", role: .notes)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        let revalidated = initial.revalidating(against: fresh)
+
+        #expect(revalidated[slotID]?.state == .missing)
+        #expect(
+            revalidated.selectedCandidateIDsBySlot[slotID]
+                == "notes-window"
+        )
+    }
+
+    @Test
+    func revalidationRequiresSelectionAfterTheExactWindowChangesDisplay()
+        throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = try #require(scenario.windows.first?.id)
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("browser-window", role: .browser, display: .main)
+            ],
+            hasExternalDisplay: true,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("browser-window", role: .browser, display: .external)
+            ],
+            hasExternalDisplay: true,
+            hasActiveCall: false
+        )
+
+        let revalidated = initial.revalidating(against: fresh)
+
+        #expect(
+            revalidated[slotID]?.state == .ambiguous(candidateCount: 1)
+        )
+        #expect(
+            revalidated.selectedCandidateIDsBySlot[slotID]
+                == "browser-window"
+        )
+    }
+
+    @Test
+    func revalidationBlocksExactWindowsThatBecomeUnchangeable() throws {
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(role: .ide),
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .notes)
+            ]
+        )
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("ide-window", role: .ide),
+                item("browser-window", role: .browser),
+                item("notes-window", role: .notes)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("ide-window", role: .ide, isMinimized: true),
+                item("browser-window", role: .browser, isFullScreen: true),
+                item("notes-window", role: .notes, canSetFrame: false)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        let revalidated = initial.revalidating(against: fresh)
+
+        #expect(
+            revalidated.slots.map(\.state) == [
+                .unsupported(.minimized),
+                .unsupported(.fullScreen),
+                .unsupported(.unchangeable)
+            ]
+        )
+        #expect(
+            revalidated.selectedCandidateIDsBySlot.count
+                == scenario.windows.count
+        )
+    }
+
+    @Test
+    func revalidationKeepsTheExactWindowWhenAnotherCandidateAppears()
+        throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = try #require(scenario.windows.first?.id)
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [item("original-window", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("original-window", role: .browser),
+                item("new-window", role: .browser)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        let revalidated = initial.revalidating(against: fresh)
+
+        guard case let .resolved(target) = revalidated[slotID]?.state else {
+            Issue.record("The frozen exact window was not preserved")
+            return
+        }
+        #expect(target.windowIdentifier.rawValue == "original-window")
+        #expect(target.matchReason == .matchedRole(.browser))
+        #expect(!revalidated.requiresCandidateSelection)
+    }
+
+    @Test
     func candidateWithoutBundleIdentifierIsUnsupported() {
         let scenario = makeScenario(
             targets: [ScenarioWindowTarget(role: .notes)]
