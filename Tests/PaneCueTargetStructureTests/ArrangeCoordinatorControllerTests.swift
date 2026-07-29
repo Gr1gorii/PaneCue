@@ -250,6 +250,78 @@ struct ArrangeCoordinatorControllerTests {
         )
     }
 
+    @Test
+    func applyRevalidationRejectsAReplacementBeforeExecution() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let plan = makeArrangePlan()
+        let scenario = try #require(plan.scenario(named: "Arrange"))
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                WorkspaceWindowInventoryItem(
+                    id: "original-editor",
+                    bundleIdentifier: "com.example.Editor",
+                    applicationName: "Editor",
+                    role: .ide
+                ),
+                WorkspaceWindowInventoryItem(
+                    id: "notes-window",
+                    bundleIdentifier: "com.example.Notes",
+                    applicationName: "Notes",
+                    role: .notes
+                )
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                WorkspaceWindowInventoryItem(
+                    id: "replacement-editor",
+                    bundleIdentifier: "com.example.Editor",
+                    applicationName: "Editor",
+                    role: .ide
+                ),
+                WorkspaceWindowInventoryItem(
+                    id: "notes-window",
+                    bundleIdentifier: "com.example.Notes",
+                    applicationName: "Notes",
+                    role: .notes
+                )
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let sequence = ArrangeResolutionSequence([initial, fresh])
+        let controller = ArrangeCoordinatorController(
+            resolve: { _ in await sequence.next() },
+            apply: { plan, _ in
+                await recorder.recordApply()
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .plan(plan, summary: "Preview ready")
+        )
+        do {
+            _ = try await controller.apply(plan)
+            Issue.record("A replacement window crossed the Apply boundary")
+        } catch let error as ArrangementCoordinatorError {
+            #expect(error == .previewNotReady)
+        }
+
+        let state = await controller.currentState()
+        #expect(state.phase == .awaitingSelection)
+        #expect(
+            state.preview?.resolution?[plan.windows[0].id]?.state
+                == .ambiguous(candidateCount: 1)
+        )
+        #expect(await recorder.applyCount() == 0)
+    }
+
     private func makeController(
         recorder: ArrangeExecutionRecorder
     ) -> ArrangeCoordinatorController {
@@ -263,6 +335,21 @@ struct ArrangeCoordinatorControllerTests {
                 return "Layout restored"
             }
         )
+    }
+}
+
+private actor ArrangeResolutionSequence {
+    private var values: [ArrangementTargetResolutionSet]
+
+    init(_ values: [ArrangementTargetResolutionSet]) {
+        self.values = values
+    }
+
+    func next() -> ArrangementTargetResolutionSet {
+        if values.count > 1 {
+            return values.removeFirst()
+        }
+        return values[0]
     }
 }
 

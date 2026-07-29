@@ -73,6 +73,16 @@ public struct ArrangementPreview: Hashable, Identifiable, Sendable {
         )
     }
 
+    fileprivate func revalidated(
+        with preparation: ArrangementPreviewPreparation
+    ) -> ArrangementPreview {
+        ArrangementPreview(
+            draft: draft,
+            eligibility: preparation.eligibility,
+            resolution: preparation.resolution ?? resolution
+        )
+    }
+
     fileprivate func updating(
         resolution: ArrangementTargetResolutionSet
     ) -> ArrangementPreview {
@@ -217,7 +227,7 @@ public struct ArrangementCoordinatorPipeline: Sendable {
     public typealias PreviewPreparation = @Sendable
         (ArrangementDraft) async throws -> ArrangementPreviewPreparation
     public typealias PreviewRevalidation = @Sendable
-        (ArrangementPreview) async throws -> ArrangementPreviewEligibility
+        (ArrangementPreview) async throws -> ArrangementPreviewPreparation
     public typealias ApplyExecution = @MainActor @Sendable
         (ArrangementPreview) async throws -> WorkspaceApplyResult
     public typealias RollbackExecution = @MainActor @Sendable
@@ -463,17 +473,17 @@ public actor ArrangementCoordinator {
         }
 
         phase = .applying
-        let eligibility: ArrangementPreviewEligibility
+        let preparation: ArrangementPreviewPreparation
         do {
-            eligibility = try await pipeline.revalidatePreview(preview)
+            preparation = try await pipeline.revalidatePreview(preview)
         } catch {
             phase = .ready
             throw error
         }
-        let revalidatedPreview = preview.revalidated(as: eligibility)
+        let revalidatedPreview = preview.revalidated(with: preparation)
         activePreview = revalidatedPreview
 
-        guard eligibility == .ready else {
+        guard preparation.eligibility == .ready else {
             phase = .awaitingSelection
             throw ArrangementCoordinatorError.previewNotReady
         }

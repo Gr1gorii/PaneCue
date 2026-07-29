@@ -165,7 +165,9 @@ struct ArrangementCoordinatorTests {
                 },
                 revalidatePreview: { _ in
                     await events.append(.revalidated)
-                    return revalidatedEligibility
+                    return ArrangementPreviewPreparation(
+                        eligibility: revalidatedEligibility
+                    )
                 },
                 apply: { preview in
                     await events.append(.applied)

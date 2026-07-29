@@ -105,6 +105,7 @@ struct CommandLabPlanCanvas: View {
         let needsSelection = isAmbiguous(targetState)
         let userSelection = selectedTarget(targetState)
         let resolvedTarget = resolvedTarget(targetState)
+        let unresolvedStatus = unresolvedStatus(targetState)
 
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -167,6 +168,14 @@ struct CommandLabPlanCanvas: View {
                             ? .white.opacity(0.72)
                             : .green
                     )
+                    .lineLimit(2)
+                } else if let unresolvedStatus, height > 88 {
+                    Label(
+                        unresolvedStatus.text,
+                        systemImage: unresolvedStatus.systemImage
+                    )
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
                     .lineLimit(2)
                 }
                 Spacer(minLength: 0)
@@ -367,6 +376,28 @@ struct CommandLabPlanCanvas: View {
         return target
     }
 
+    private func unresolvedStatus(
+        _ state: ArrangementTargetResolutionState?
+    ) -> ArrangementUnresolvedPresentation? {
+        guard let state else {
+            return nil
+        }
+        switch state {
+        case .resolved, .ambiguous:
+            return nil
+        case .missing:
+            return ArrangementUnresolvedPresentation(
+                text: "Window missing",
+                systemImage: "questionmark.app"
+            )
+        case let .unsupported(reason):
+            return ArrangementUnresolvedPresentation(
+                text: reason.previewDescription,
+                systemImage: "exclamationmark.triangle.fill"
+            )
+        }
+    }
+
     private func handlePoint(
         _ handle: ScenarioGridResizeHandle,
         in size: CGSize
@@ -486,7 +517,9 @@ struct CommandLabPlanInspector: View {
                     Array(plan.windows.enumerated()),
                     id: \.element.id
                 ) { index, window in
-                    let matchReason = matchReason(for: window.id)
+                    let resolution = resolutionPresentation(
+                        for: window.id
+                    )
                     Button {
                         plan.selectedWindowID = window.id
                     } label: {
@@ -501,14 +534,17 @@ struct CommandLabPlanInspector: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(window.target.displayName)
                                     .lineLimit(1)
-                                if let matchReason {
+                                if let resolution {
                                     Label(
-                                        matchReason.shortDescription,
-                                        systemImage:
-                                            matchReason.previewSystemImage
+                                        resolution.text,
+                                        systemImage: resolution.systemImage
                                     )
                                     .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(
+                                        resolution.isBlocking
+                                            ? .orange
+                                            : .secondary
+                                    )
                                     .lineLimit(1)
                                 }
                             }
@@ -526,7 +562,7 @@ struct CommandLabPlanInspector: View {
                         accessibilityLabel(
                             for: window,
                             index: index,
-                            matchReason: matchReason
+                            resolution: resolution
                         )
                     )
                 }
@@ -647,25 +683,50 @@ struct CommandLabPlanInspector: View {
         plan.selectedWindowIndex
     }
 
-    private func matchReason(
+    private func resolutionPresentation(
         for slotID: UUID
-    ) -> ArrangementTargetMatchReason? {
-        guard case let .resolved(target) = resolution?[slotID]?.state else {
+    ) -> ArrangementSlotPresentation? {
+        guard let state = resolution?[slotID]?.state else {
             return nil
         }
-        return target.matchReason
+        switch state {
+        case let .resolved(target):
+            return ArrangementSlotPresentation(
+                text: target.matchReason.shortDescription,
+                systemImage: target.matchReason.previewSystemImage,
+                isBlocking: false
+            )
+        case .ambiguous:
+            return ArrangementSlotPresentation(
+                text: "Needs selection",
+                systemImage: "exclamationmark.circle.fill",
+                isBlocking: true
+            )
+        case .missing:
+            return ArrangementSlotPresentation(
+                text: "Window missing",
+                systemImage: "questionmark.app",
+                isBlocking: true
+            )
+        case let .unsupported(reason):
+            return ArrangementSlotPresentation(
+                text: reason.previewDescription,
+                systemImage: "exclamationmark.triangle.fill",
+                isBlocking: true
+            )
+        }
     }
 
     private func accessibilityLabel(
         for window: ScenarioWindowSlot,
         index: Int,
-        matchReason: ArrangementTargetMatchReason?
+        resolution: ArrangementSlotPresentation?
     ) -> String {
         let prefix = "\(index + 1), \(window.target.displayName)"
-        guard let matchReason else {
+        guard let resolution else {
             return prefix
         }
-        return "\(prefix), \(matchReason.shortDescription)"
+        return "\(prefix), \(resolution.text)"
     }
 
     private var selectedTargetKey: Binding<String> {
@@ -809,6 +870,17 @@ struct CommandLabPlanInspector: View {
     }
 }
 
+private struct ArrangementSlotPresentation {
+    let text: String
+    let systemImage: String
+    let isBlocking: Bool
+}
+
+private struct ArrangementUnresolvedPresentation {
+    let text: String
+    let systemImage: String
+}
+
 private extension ArrangementTargetMatchReason {
     var previewSystemImage: String {
         switch self {
@@ -822,6 +894,25 @@ private extension ArrangementTargetMatchReason {
             return "1.circle.fill"
         case .savedCueMapping:
             return "square.grid.3x3.fill"
+        }
+    }
+}
+
+private extension UnsupportedArrangementTargetReason {
+    var previewDescription: String {
+        switch self {
+        case .fullScreen:
+            return "Window is full screen"
+        case .minimized:
+            return "Window is minimized"
+        case .unchangeable:
+            return "Window cannot be resized"
+        case .externalDisplayUnavailable:
+            return "External display unavailable"
+        case .conditionNotMet:
+            return "Scenario condition not met"
+        case .missingBundleIdentifier:
+            return "Application identity unavailable"
         }
     }
 }

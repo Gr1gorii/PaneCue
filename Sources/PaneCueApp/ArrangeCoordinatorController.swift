@@ -39,7 +39,18 @@ final class ArrangeCoordinatorController {
                     )
                 },
                 revalidatePreview: { preview in
-                    eligibility(for: preview)
+                    guard let resolve else {
+                        return ArrangementPreviewPreparation(
+                            eligibility: eligibility(for: preview)
+                        )
+                    }
+                    let fresh = try await resolve(preview.draft)
+                    let resolution = preview.resolution?
+                        .revalidating(against: fresh) ?? fresh
+                    return ArrangementPreviewPreparation(
+                        resolution: resolution,
+                        isPlanValid: preview.plan.windows.count >= 2
+                    )
                 },
                 apply: { preview in
                     try await apply(preview.plan, preview.resolution)

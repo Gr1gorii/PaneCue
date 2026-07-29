@@ -29,6 +29,24 @@ struct WorkspaceApplyPreflightTests {
     }
 
     @Test
+    func frozenCandidateDoesNotFallBackToAReplacementAtApplyTime() {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = scenario.windows[0].id
+        let decisions = WorkspaceApplyPreflight.evaluate(
+            scenario: scenario,
+            inventory: [item("replacement-window", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false,
+            selectedCandidateIDsBySlot: [slotID: "closed-window"]
+        )
+
+        #expect(decisions[0].status == .missing)
+        #expect(decisions[0].candidateIDs.isEmpty)
+    }
+
+    @Test
     func detectsClosedAndAmbiguousTargetsWithoutChoosingSilently() {
         let scenario = makeScenario(
             targets: [
