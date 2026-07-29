@@ -530,7 +530,26 @@ public final class WindowManager {
                     selection.targetFrame,
                     on: window.element
                 )
-                guard let appliedFrame = AXHelpers.frame(of: window.element),
+                var appliedFrame = AXHelpers.frame(of: window.element)
+                if appliedFrame.map({
+                    !framesApproximatelyEqual(
+                        $0,
+                        selection.targetFrame,
+                        tolerance: 8
+                    )
+                }) ?? true {
+                    // Notes and some AppKit windows settle their new size in
+                    // the owning process before accepting the final edge.
+                    // Retry once after that reconciliation instead of
+                    // weakening the exact Preview verification tolerance.
+                    Thread.sleep(forTimeInterval: 0.12)
+                    try AXHelpers.setFrame(
+                        selection.targetFrame,
+                        on: window.element
+                    )
+                    appliedFrame = AXHelpers.frame(of: window.element)
+                }
+                guard let appliedFrame,
                       framesApproximatelyEqual(
                           appliedFrame,
                           selection.targetFrame,
