@@ -69,6 +69,16 @@ struct PaneCueDashboardActions {
     let discardArrangement: @MainActor () -> Void
     let analyzeCommand: @MainActor
         (String, WorkspacePlan?) async throws -> CommandLabAnalysis
+    let prepareWorkspacePlan: @MainActor
+        (WorkspacePlan) async throws -> ArrangementPreview
+    let selectArrangementCandidate: @MainActor
+        (
+            UUID,
+            UUID,
+            EphemeralWindowIdentifier
+        ) async throws -> ArrangementPreview
+    let arrangementState: @MainActor
+        () async -> ArrangementCoordinatorState?
     let applyAnalyzedCommand: @MainActor
         (VoiceCommandIntent) async throws -> String
     let applyWorkspacePlan: @MainActor
@@ -104,6 +114,7 @@ final class PaneCueDashboardModel: ObservableObject {
     @Published private(set) var hasCompletedTextOnboarding = false
     @Published private(set) var editorRevision = 0
     @Published private(set) var arrangementRevision = 0
+    @Published private(set) var arrangementPreview: ArrangementPreview?
     @Published var isOnboardingPresented: Bool
 
     let applications: [InstalledApplication]
@@ -197,11 +208,13 @@ final class PaneCueDashboardModel: ObservableObject {
 
     func startNewArrangement() {
         actions.beginArrangement()
+        arrangementPreview = nil
         arrangementRevision += 1
         selectedSection = .arrange
     }
 
     func discardArrangementPreview() {
+        arrangementPreview = nil
         actions.discardArrangement()
     }
 
@@ -275,9 +288,29 @@ final class PaneCueDashboardModel: ObservableObject {
         _ transcript: String,
         currentPlan: WorkspacePlan?
     ) async throws -> CommandLabAnalysis {
-        try await actions.analyzeCommand(
+        let analysis = try await actions.analyzeCommand(
             transcript,
             currentPlan
+        )
+        arrangementPreview = await actions.arrangementState()?.preview
+        return analysis
+    }
+
+    func prepareWorkspacePlan(
+        _ plan: WorkspacePlan
+    ) async throws {
+        arrangementPreview = try await actions.prepareWorkspacePlan(plan)
+    }
+
+    func selectArrangementCandidate(
+        previewID: UUID,
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) async throws {
+        arrangementPreview = try await actions.selectArrangementCandidate(
+            previewID,
+            slotID,
+            candidateID
         )
     }
 
@@ -293,6 +326,7 @@ final class PaneCueDashboardModel: ObservableObject {
         _ plan: WorkspacePlan
     ) async throws -> WorkspaceApplyResult {
         let result = try await actions.applyWorkspacePlan(plan)
+        arrangementPreview = await actions.arrangementState()?.preview
         if result.didChangeAnyWindow {
             completeTextOnboarding()
         }
@@ -300,7 +334,9 @@ final class PaneCueDashboardModel: ObservableObject {
     }
 
     func rollbackLastApply() async throws -> String {
-        try await actions.rollbackWorkspace()
+        let summary = try await actions.rollbackWorkspace()
+        arrangementPreview = nil
+        return summary
     }
 
     func saveCommandCorrection(

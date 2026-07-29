@@ -44,12 +44,17 @@ struct ArrangementTargetResolutionTests {
             resolution.slots[1].state
                 == .ambiguous(candidateCount: 2)
         )
+        #expect(
+            resolution.slots[1].candidates.map(\.windowIdentifier.rawValue)
+                == ["browser-one", "browser-two"]
+        )
         #expect(resolution.slots[2].state == .missing)
         #expect(
             resolution.slots[3].state
                 == .unsupported(.fullScreen)
         )
         #expect(!resolution.isReadyForApply)
+        #expect(resolution.requiresCandidateSelection)
     }
 
     @Test
@@ -206,6 +211,114 @@ struct ArrangementTargetResolutionTests {
                     .conditionNotMet
                 )
         )
+    }
+
+    @Test
+    func selectingCandidateBindsItToTheRequestedSlot() throws {
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .notes)
+            ]
+        )
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("browser-one", role: .browser),
+                item("browser-two", role: .browser),
+                item("notes", role: .notes)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        #expect(!initial.isReadyForApply)
+        let selected = try initial.selecting(
+            EphemeralWindowIdentifier(rawValue: "browser-two"),
+            for: scenario.windows[0].id
+        )
+
+        guard case let .resolved(target) = selected.slots[0].state else {
+            Issue.record("The selected candidate was not bound to its slot")
+            return
+        }
+        #expect(target.windowIdentifier.rawValue == "browser-two")
+        #expect(target.matchReason == .selectedByUser)
+        #expect(
+            selected.selectedCandidateIDsBySlot[scenario.windows[0].id]
+                == "browser-two"
+        )
+        #expect(selected.isReadyForApply)
+    }
+
+    @Test
+    func selectionNeverAssignsOneWindowToTwoSlots() throws {
+        let scenario = makeScenario(
+            targets: [
+                ScenarioWindowTarget(role: .browser),
+                ScenarioWindowTarget(role: .browser)
+            ]
+        )
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item("browser-one", role: .browser),
+                item("browser-two", role: .browser)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+
+        let selected = try initial.selecting(
+            EphemeralWindowIdentifier(rawValue: "browser-one"),
+            for: scenario.windows[0].id
+        )
+
+        guard case let .resolved(first) = selected.slots[0].state,
+              case let .resolved(second) = selected.slots[1].state else {
+            Issue.record("The remaining unique candidate was not resolved")
+            return
+        }
+        #expect(first.windowIdentifier.rawValue == "browser-one")
+        #expect(first.matchReason == .selectedByUser)
+        #expect(second.windowIdentifier.rawValue == "browser-two")
+        #expect(second.matchReason == .onlyMatchingWindow)
+        #expect(first.windowIdentifier != second.windowIdentifier)
+        #expect(selected.isReadyForApply)
+    }
+
+    @Test
+    func unsupportedCandidateCannotBeSelected() throws {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                item(
+                    "blocked-browser",
+                    role: .browser,
+                    isFullScreen: true
+                ),
+                item("available-browser", role: .browser)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let blocked = try #require(
+            initial.slots[0].candidates.first(where: {
+                $0.windowIdentifier.rawValue == "blocked-browser"
+            })
+        )
+
+        #expect(!blocked.isSelectable)
+        #expect(blocked.unsupportedReason == .fullScreen)
+        #expect(throws: ArrangementTargetSelectionError.candidateUnsupported) {
+            try initial.selecting(
+                blocked.windowIdentifier,
+                for: scenario.windows[0].id
+            )
+        }
     }
 
     private func makeScenario(

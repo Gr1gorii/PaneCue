@@ -144,6 +144,79 @@ struct ArrangementCoordinatorStateMachineTests {
     }
 
     @Test
+    func candidateSelectionMovesPreviewToReadyWithoutApplying() async throws {
+        let mutationCount = AsyncCounter()
+        let plan = makeStateMachinePlan()
+        let candidate = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-one"
+            ),
+            bundleIdentifier: "com.example.Application",
+            display: .main,
+            localizedApplicationName: "Application"
+        )
+        let otherCandidate = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-two"
+            ),
+            bundleIdentifier: "com.example.Application",
+            display: .main,
+            localizedApplicationName: "Application"
+        )
+        let resolution = ArrangementTargetResolutionSet(
+            slots: [
+                ArrangementSlotResolution(
+                    id: plan.windows[0].id,
+                    state: .ambiguous(candidateCount: 2),
+                    candidates: [candidate, otherCandidate]
+                ),
+                ArrangementSlotResolution(
+                    id: plan.windows[1].id,
+                    state: .resolved(
+                        ResolvedArrangementTarget(
+                            bundleIdentifier: "com.example.Notes",
+                            windowIdentifier: EphemeralWindowIdentifier(
+                                rawValue: "notes-window"
+                            ),
+                            display: .main,
+                            matchReason: .matchedRole(.notes),
+                            localizedApplicationName: "Notes"
+                        )
+                    )
+                )
+            ]
+        )
+        let coordinator = ArrangementCoordinator(
+            pipeline: ArrangementCoordinatorPipeline(
+                preparePreview: { _ in
+                    ArrangementPreviewPreparation(resolution: resolution)
+                },
+                revalidatePreview: { _ in .ready },
+                apply: { preview in
+                    await mutationCount.increment()
+                    return makeStateMachineResult(for: preview)
+                },
+                rollback: { "Layout restored" }
+            )
+        )
+        let preview = try await coordinator.preparePreview(
+            source: .arrange,
+            makeDraft: { plan }
+        )
+
+        #expect((await coordinator.currentState()).phase == .awaitingSelection)
+        let updated = try await coordinator.selectCandidate(
+            previewID: preview.id,
+            slotID: plan.windows[0].id,
+            candidateID: candidate.windowIdentifier
+        )
+
+        #expect(updated.eligibility == .ready)
+        #expect((await coordinator.currentState()).phase == .ready)
+        #expect(await mutationCount.value() == 0)
+    }
+
+    @Test
     func newerRequestCancelsObsoleteParsing() async throws {
         let oldParseStarted = AsyncGate()
         let oldParseCancelled = AsyncGate()

@@ -64,15 +64,18 @@ public struct WorkspaceApplyPreflightDecision: Hashable, Identifiable,
     public let id: UUID
     public let targetName: String
     public let status: WorkspaceApplyPreflightStatus
+    public let candidateIDs: [String]
 
     public init(
         id: UUID,
         targetName: String,
-        status: WorkspaceApplyPreflightStatus
+        status: WorkspaceApplyPreflightStatus,
+        candidateIDs: [String] = []
     ) {
         self.id = id
         self.targetName = targetName
         self.status = status
+        self.candidateIDs = candidateIDs
     }
 }
 
@@ -81,7 +84,8 @@ public enum WorkspaceApplyPreflight {
         scenario: CustomScenario,
         inventory: [WorkspaceWindowInventoryItem],
         hasExternalDisplay: Bool,
-        hasActiveCall: Bool
+        hasActiveCall: Bool,
+        selectedCandidateIDsBySlot: [UUID: String] = [:]
     ) -> [WorkspaceApplyPreflightDecision] {
         if scenario.conditions.requiresExternalDisplay,
            !hasExternalDisplay {
@@ -105,10 +109,12 @@ public enum WorkspaceApplyPreflight {
                 )
             }
 
-            let candidates = inventory.filter { candidate in
-                matches(slot.target, candidate: candidate)
-                    && !claimedCandidateIDs.contains(candidate.id)
-            }
+            let candidates = matchingCandidates(
+                for: slot,
+                inventory: inventory,
+                claimedCandidateIDs: claimedCandidateIDs,
+                selectedCandidateID: selectedCandidateIDsBySlot[slot.id]
+            )
 
             guard !candidates.isEmpty else {
                 return decision(for: slot, status: .missing)
@@ -116,46 +122,71 @@ public enum WorkspaceApplyPreflight {
             guard candidates.count == 1, let candidate = candidates.first else {
                 return decision(
                     for: slot,
-                    status: .ambiguous(candidateCount: candidates.count)
+                    status: .ambiguous(candidateCount: candidates.count),
+                    candidateIDs: candidates.map(\.id)
                 )
             }
 
             if candidate.isFullScreen {
                 return decision(
                     for: slot,
-                    status: .fullScreen(candidateID: candidate.id)
+                    status: .fullScreen(candidateID: candidate.id),
+                    candidateIDs: [candidate.id]
                 )
             }
             if candidate.isMinimized {
                 return decision(
                     for: slot,
-                    status: .minimized(candidateID: candidate.id)
+                    status: .minimized(candidateID: candidate.id),
+                    candidateIDs: [candidate.id]
                 )
             }
             if !candidate.canSetFrame {
                 return decision(
                     for: slot,
-                    status: .unchangeable(candidateID: candidate.id)
+                    status: .unchangeable(candidateID: candidate.id),
+                    candidateIDs: [candidate.id]
                 )
             }
 
             claimedCandidateIDs.insert(candidate.id)
             return decision(
                 for: slot,
-                status: .ready(candidateID: candidate.id)
+                status: .ready(candidateID: candidate.id),
+                candidateIDs: [candidate.id]
             )
         }
     }
 
     private static func decision(
         for slot: ScenarioWindowSlot,
-        status: WorkspaceApplyPreflightStatus
+        status: WorkspaceApplyPreflightStatus,
+        candidateIDs: [String] = []
     ) -> WorkspaceApplyPreflightDecision {
         WorkspaceApplyPreflightDecision(
             id: slot.id,
             targetName: slot.target.displayName,
-            status: status
+            status: status,
+            candidateIDs: candidateIDs
         )
+    }
+
+    private static func matchingCandidates(
+        for slot: ScenarioWindowSlot,
+        inventory: [WorkspaceWindowInventoryItem],
+        claimedCandidateIDs: Set<String>,
+        selectedCandidateID: String?
+    ) -> [WorkspaceWindowInventoryItem] {
+        inventory.filter { candidate in
+            guard !claimedCandidateIDs.contains(candidate.id),
+                  matches(slot.target, candidate: candidate) else {
+                return false
+            }
+            guard let selectedCandidateID else {
+                return true
+            }
+            return candidate.id == selectedCandidateID
+        }
     }
 
     private static func matches(

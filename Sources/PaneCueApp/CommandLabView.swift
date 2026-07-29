@@ -1,3 +1,4 @@
+import AppKit
 import PaneCueCore
 import SwiftUI
 
@@ -17,6 +18,8 @@ struct CommandLabView: View {
     @State private var errorMessage: String?
     @State private var applyResult: WorkspaceApplyResult?
     @State private var didRollback = false
+    @State private var isSelectingCandidate = false
+    @State private var isRefreshingCandidates = false
 
     var body: some View {
         ScrollView {
@@ -224,9 +227,15 @@ struct CommandLabView: View {
                                 self.didRollback = false
                             }
                         ),
+                        resolution: candidatePreview(
+                            for: workspacePlan
+                        )?.resolution,
                         onCommit: { previous in
                             remember(previous)
                             feedback = "Preview updated"
+                            refreshResolutionIfTargetsChanged(
+                                from: previous
+                            )
                         }
                     )
                     .frame(minHeight: 350)
@@ -248,6 +257,9 @@ struct CommandLabView: View {
                     canUndo: !planHistory.isEmpty,
                     onBeginChange: { previous in
                         remember(previous)
+                        refreshResolutionIfTargetsChanged(
+                            from: previous
+                        )
                     },
                     onUndo: {
                         undoPlanChange()
@@ -284,6 +296,30 @@ struct CommandLabView: View {
                     }
                 )
                 .frame(width: 315)
+            }
+
+            if let preview = candidatePreview(for: workspacePlan),
+               let resolution = preview.resolution,
+               resolution.slots.contains(where: {
+                   !$0.candidates.isEmpty
+                       && (
+                           $0.candidates.count > 1
+                               || isAmbiguous($0.state)
+                       )
+               }) {
+                ArrangementCandidateChooser(
+                    plan: workspacePlan,
+                    resolution: resolution,
+                    isSelecting: isSelectingCandidate
+                        || isRefreshingCandidates,
+                    onSelect: { slotID, candidateID in
+                        selectCandidate(
+                            previewID: preview.id,
+                            slotID: slotID,
+                            candidateID: candidateID
+                        )
+                    }
+                )
             }
 
             if let applyResult {
@@ -331,7 +367,12 @@ struct CommandLabView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    isApplying || workspacePlan.windows.count < 2
+                    isApplying
+                        || isSelectingCandidate
+                        || isRefreshingCandidates
+                        || workspacePlan.windows.count < 2
+                        || candidatePreview(for: workspacePlan)?
+                            .eligibility != .ready
                 )
             }
         } else if let analyzedIntent {
@@ -668,12 +709,327 @@ struct CommandLabView: View {
         guard let previous = planHistory.popLast() else {
             return
         }
+        let current = workspacePlan
         workspacePlan = previous
         analyzedIntent = nil
         hasAnalyzed = true
         feedback = "Undid the last draft change"
         applyResult = nil
         didRollback = false
+        if let current,
+           !targetsMatch(current, previous) {
+            refreshResolution(for: previous)
+        }
+    }
+
+    private func candidatePreview(
+        for plan: WorkspacePlan
+    ) -> ArrangementPreview? {
+        guard let preview = model.arrangementPreview,
+              preview.id == plan.id else {
+            return nil
+        }
+        return preview
+    }
+
+    private func isAmbiguous(
+        _ state: ArrangementTargetResolutionState
+    ) -> Bool {
+        if case .ambiguous = state {
+            return true
+        }
+        return false
+    }
+
+    private func refreshResolutionIfTargetsChanged(
+        from previous: WorkspacePlan
+    ) {
+        guard let current = workspacePlan,
+              !targetsMatch(previous, current) else {
+            return
+        }
+        refreshResolution(for: current)
+    }
+
+    private func refreshResolution(for plan: WorkspacePlan) {
+        isRefreshingCandidates = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer {
+                isRefreshingCandidates = false
+            }
+            do {
+                try await model.prepareWorkspacePlan(plan)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func selectCandidate(
+        previewID: UUID,
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) {
+        isSelectingCandidate = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer {
+                isSelectingCandidate = false
+            }
+            do {
+                try await model.selectArrangementCandidate(
+                    previewID: previewID,
+                    slotID: slotID,
+                    candidateID: candidateID
+                )
+                feedback = "Window selected"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func targetsMatch(
+        _ first: WorkspacePlan,
+        _ second: WorkspacePlan
+    ) -> Bool {
+        guard first.windows.count == second.windows.count else {
+            return false
+        }
+        return zip(first.windows, second.windows).allSatisfy { lhs, rhs in
+            lhs.id == rhs.id
+                && lhs.target == rhs.target
+                && lhs.display == rhs.display
+        }
+    }
+}
+
+private struct ArrangementCandidateChooser: View {
+    let plan: WorkspacePlan
+    let resolution: ArrangementTargetResolutionSet
+    let isSelecting: Bool
+    let onSelect: (UUID, EphemeralWindowIdentifier) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "rectangle.stack.badge.person.crop")
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Choose the exact window")
+                        .font(.headline)
+                    Text(
+                        "PaneCue found more than one match. Apply stays disabled until every required choice is resolved."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            ForEach(chooserSlots) { slot in
+                candidateSection(slot)
+            }
+        }
+        .padding(18)
+        .background(
+            Color.orange.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 17)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 17)
+                .stroke(Color.orange.opacity(0.28))
+        }
+    }
+
+    private var chooserSlots: [ArrangementSlotResolution] {
+        resolution.slots.filter {
+            !$0.candidates.isEmpty
+                && ($0.candidates.count > 1 || isAmbiguous($0.state))
+        }
+    }
+
+    @ViewBuilder
+    private func candidateSection(
+        _ slot: ArrangementSlotResolution
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text(targetName(for: slot.id))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if isAmbiguous(slot.state) {
+                    Label(
+                        "Needs selection",
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                } else {
+                    Label("Selected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+
+            ForEach(Array(slot.candidates.enumerated()), id: \.element.id) {
+                index, candidate in
+                candidateButton(
+                    candidate,
+                    index: index,
+                    slot: slot,
+                    shortcutNumber: shortcutNumber(
+                        slotID: slot.id,
+                        candidateID: candidate.id
+                    )
+                )
+            }
+        }
+        .padding(13)
+        .background(
+            Color.primary.opacity(0.035),
+            in: RoundedRectangle(cornerRadius: 13)
+        )
+    }
+
+    @ViewBuilder
+    private func candidateButton(
+        _ candidate: ArrangementTargetCandidate,
+        index: Int,
+        slot: ArrangementSlotResolution,
+        shortcutNumber: Int?
+    ) -> some View {
+        let selected = selectedCandidateID(for: slot.state) == candidate.id
+        let button = Button {
+            onSelect(slot.id, candidate.id)
+        } label: {
+            HStack(spacing: 11) {
+                applicationIcon(for: candidate)
+                    .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.localizedApplicationName)
+                        .font(.subheadline.weight(.medium))
+                    Text(
+                        candidate.localDifferentiator
+                            ?? "Window \(index + 1)"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+
+                Spacer()
+
+                if let shortcutNumber, !selected {
+                    Text("⌘\(shortcutNumber)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
+
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.indigo)
+                } else if !candidate.isSelectable {
+                    Text("Unavailable")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(
+                selected
+                    ? Color.indigo.opacity(0.14)
+                    : Color(nsColor: .controlBackgroundColor).opacity(0.55),
+                in: RoundedRectangle(cornerRadius: 11)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 11)
+                    .stroke(
+                        selected
+                            ? Color.indigo.opacity(0.65)
+                            : Color.primary.opacity(0.08)
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSelecting || selected || !candidate.isSelectable)
+        .accessibilityLabel(
+            "\(candidate.localizedApplicationName), \(candidate.localDifferentiator ?? "Window \(index + 1)")"
+        )
+        .accessibilityHint(
+            selected
+                ? "Selected for this Preview slot"
+                : "Select this window for the Preview slot"
+        )
+
+        if let shortcutNumber {
+            button.keyboardShortcut(
+                KeyEquivalent(Character(String(shortcutNumber))),
+                modifiers: .command
+            )
+        } else {
+            button
+        }
+    }
+
+    @ViewBuilder
+    private func applicationIcon(
+        for candidate: ArrangementTargetCandidate
+    ) -> some View {
+        if let bundleIdentifier = candidate.bundleIdentifier,
+           let icon = NSRunningApplication.runningApplications(
+               withBundleIdentifier: bundleIdentifier
+           ).first?.icon {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: "macwindow")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func targetName(for slotID: UUID) -> String {
+        plan.windows.first(where: { $0.id == slotID })?
+            .target.displayName ?? "Window"
+    }
+
+    private func shortcutNumber(
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) -> Int? {
+        let ordered = chooserSlots.flatMap { slot in
+            slot.candidates.filter(\.isSelectable).map {
+                (slot.id, $0.id)
+            }
+        }
+        guard let index = ordered.firstIndex(where: {
+            $0.0 == slotID && $0.1 == candidateID
+        }), index < 9 else {
+            return nil
+        }
+        return index + 1
+    }
+
+    private func selectedCandidateID(
+        for state: ArrangementTargetResolutionState
+    ) -> EphemeralWindowIdentifier? {
+        guard case let .resolved(target) = state else {
+            return nil
+        }
+        return target.windowIdentifier
+    }
+
+    private func isAmbiguous(
+        _ state: ArrangementTargetResolutionState
+    ) -> Bool {
+        if case .ambiguous = state {
+            return true
+        }
+        return false
     }
 }
 

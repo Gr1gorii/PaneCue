@@ -1,33 +1,65 @@
+import Foundation
 import PaneCueCore
 
 /// Connects the existing Arrange UI to the shared Core coordinator without
 /// giving the view a second window-execution path.
 @MainActor
 final class ArrangeCoordinatorController {
+    typealias ResolutionExecution = @MainActor @Sendable
+        (WorkspacePlan) async throws -> ArrangementTargetResolutionSet
     typealias ApplyExecution = @MainActor @Sendable
-        (WorkspacePlan) async throws -> WorkspaceApplyResult
+        (
+            WorkspacePlan,
+            ArrangementTargetResolutionSet?
+        ) async throws -> WorkspaceApplyResult
     typealias RollbackExecution = @MainActor @Sendable
         () async throws -> String
 
     private let coordinator: ArrangementCoordinator
 
     init(
+        resolve: ResolutionExecution?,
         apply: @escaping ApplyExecution,
         rollback: @escaping RollbackExecution
     ) {
         coordinator = ArrangementCoordinator(
             pipeline: ArrangementCoordinatorPipeline(
                 preparePreview: { draft in
-                    eligibility(for: draft.plan)
+                    if let resolve {
+                        let resolution = try await resolve(draft.plan)
+                        return ArrangementPreviewPreparation(
+                            resolution: resolution,
+                            isPlanValid: draft.plan.windows.count >= 2
+                        )
+                    }
+                    return ArrangementPreviewPreparation(
+                        eligibility: draft.plan.windows.count >= 2
+                            ? .ready
+                            : .blocked
+                    )
                 },
                 revalidatePreview: { preview in
-                    eligibility(for: preview.plan)
+                    eligibility(for: preview)
                 },
                 apply: { preview in
-                    try await apply(preview.plan)
+                    try await apply(preview.plan, preview.resolution)
                 },
                 rollback: rollback
             )
+        )
+    }
+
+    convenience init(
+        apply: @escaping @MainActor @Sendable
+            (WorkspacePlan) async throws -> WorkspaceApplyResult,
+        rollback: @escaping RollbackExecution
+    ) {
+        self.init(
+            resolve: nil,
+            apply: { plan, _ in
+                try await apply(plan)
+            },
+            rollback: rollback
         )
     }
 
@@ -66,7 +98,19 @@ final class ArrangeCoordinatorController {
             )
         }
 
-        let preview = try await prepare(plan)
+        let preview: ArrangementPreview
+        if let current = await coordinator.currentPreview(),
+           current.id == plan.id,
+           targetsMatch(current.plan, plan) {
+            preview = current.plan == plan
+                ? current
+                : try await coordinator.updatePreviewPlan(
+                    previewID: current.id,
+                    plan: plan
+                )
+        } else {
+            preview = try await prepare(plan)
+        }
         return try await coordinator.apply(
             previewID: preview.id,
             authority: .directUserAction
@@ -89,6 +133,24 @@ final class ArrangeCoordinatorController {
         await coordinator.currentState()
     }
 
+    func preparePlan(
+        _ plan: WorkspacePlan
+    ) async throws -> ArrangementPreview {
+        try await prepare(plan)
+    }
+
+    func selectCandidate(
+        previewID: UUID,
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) async throws -> ArrangementPreview {
+        try await coordinator.selectCandidate(
+            previewID: previewID,
+            slotID: slotID,
+            candidateID: candidateID
+        )
+    }
+
     private func prepare(
         _ plan: WorkspacePlan
     ) async throws -> ArrangementPreview {
@@ -101,7 +163,24 @@ final class ArrangeCoordinatorController {
 }
 
 private func eligibility(
-    for plan: WorkspacePlan
+    for preview: ArrangementPreview
 ) -> ArrangementPreviewEligibility {
-    plan.windows.count >= 2 ? .ready : .blocked
+    preview.plan.windows.count >= 2
+        && !(preview.resolution?.requiresCandidateSelection ?? false)
+        ? .ready
+        : .blocked
+}
+
+private func targetsMatch(
+    _ first: WorkspacePlan,
+    _ second: WorkspacePlan
+) -> Bool {
+    guard first.windows.count == second.windows.count else {
+        return false
+    }
+    return zip(first.windows, second.windows).allSatisfy { lhs, rhs in
+        lhs.id == rhs.id
+            && lhs.target == rhs.target
+            && lhs.display == rhs.display
+    }
 }

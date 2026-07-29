@@ -159,7 +159,9 @@ struct ArrangementCoordinatorTests {
             pipeline: ArrangementCoordinatorPipeline(
                 preparePreview: { _ in
                     await events.append(.prepared)
-                    return preparedEligibility
+                    return ArrangementPreviewPreparation(
+                        eligibility: preparedEligibility
+                    )
                 },
                 revalidatePreview: { _ in
                     await events.append(.revalidated)
