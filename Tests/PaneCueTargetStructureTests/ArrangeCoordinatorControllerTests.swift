@@ -98,6 +98,84 @@ struct ArrangeCoordinatorControllerTests {
         #expect(await recorder.applyCount() == 0)
     }
 
+    @Test
+    func ambiguousPreviewAppliesOnlyAfterTheExactSelection() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let plan = makeArrangePlan()
+        let first = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-one"
+            ),
+            bundleIdentifier: "com.example.Editor",
+            display: .main,
+            localizedApplicationName: "Editor"
+        )
+        let second = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-two"
+            ),
+            bundleIdentifier: "com.example.Editor",
+            display: .main,
+            localizedApplicationName: "Editor"
+        )
+        let resolution = ArrangementTargetResolutionSet(
+            slots: [
+                ArrangementSlotResolution(
+                    id: plan.windows[0].id,
+                    state: .ambiguous(candidateCount: 2),
+                    candidates: [first, second]
+                ),
+                ArrangementSlotResolution(
+                    id: plan.windows[1].id,
+                    state: .resolved(
+                        ResolvedArrangementTarget(
+                            bundleIdentifier: "com.example.Notes",
+                            windowIdentifier: EphemeralWindowIdentifier(
+                                rawValue: "notes-window"
+                            ),
+                            display: .main,
+                            matchReason: .matchedRole(.notes),
+                            localizedApplicationName: "Notes"
+                        )
+                    )
+                )
+            ]
+        )
+        let controller = ArrangeCoordinatorController(
+            resolve: { _ in resolution },
+            apply: { plan, selectedResolution in
+                await recorder.recordApply(
+                    selectedCandidateIDsBySlot:
+                        selectedResolution?.selectedCandidateIDsBySlot ?? [:]
+                )
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .plan(plan, summary: "Preview ready")
+        )
+        let blocked = await controller.currentState()
+        #expect(blocked.phase == .awaitingSelection)
+        #expect(await recorder.applyCount() == 0)
+
+        let previewID = try #require(blocked.preview?.id)
+        _ = try await controller.selectCandidate(
+            previewID: previewID,
+            slotID: plan.windows[0].id,
+            candidateID: second.windowIdentifier
+        )
+        #expect((await controller.currentState()).phase == .ready)
+
+        _ = try await controller.apply(plan)
+        #expect(await recorder.applyCount() == 1)
+        #expect(
+            await recorder.selectedCandidateID(for: plan.windows[0].id)
+                == "candidate-two"
+        )
+    }
+
     private func makeController(
         recorder: ArrangeExecutionRecorder
     ) -> ArrangeCoordinatorController {
@@ -117,9 +195,17 @@ struct ArrangeCoordinatorControllerTests {
 private actor ArrangeExecutionRecorder {
     private var applies = 0
     private var rollbacks = 0
+    private var selectedCandidateIDsBySlot: [UUID: String] = [:]
 
     func recordApply() {
         applies += 1
+    }
+
+    func recordApply(
+        selectedCandidateIDsBySlot: [UUID: String]
+    ) {
+        applies += 1
+        self.selectedCandidateIDsBySlot = selectedCandidateIDsBySlot
     }
 
     func recordRollback() {
@@ -132,6 +218,10 @@ private actor ArrangeExecutionRecorder {
 
     func rollbackCount() -> Int {
         rollbacks
+    }
+
+    func selectedCandidateID(for slotID: UUID) -> String? {
+        selectedCandidateIDsBySlot[slotID]
     }
 }
 

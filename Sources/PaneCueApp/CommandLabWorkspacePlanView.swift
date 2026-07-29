@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CommandLabPlanCanvas: View {
     @Binding var plan: WorkspacePlan
+    let resolution: ArrangementTargetResolutionSet?
     let onCommit: (WorkspacePlan) -> Void
 
     @State private var gestureStartPlan: WorkspacePlan?
@@ -100,6 +101,9 @@ struct CommandLabPlanCanvas: View {
         let width = max(canvasSize.width * rect.width, 32)
         let height = max(canvasSize.height * rect.height, 28)
         let isSelected = plan.selectedWindowID == window.id
+        let targetState = resolution?[window.id]?.state
+        let needsSelection = isAmbiguous(targetState)
+        let userSelection = selectedTarget(targetState)
 
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -110,10 +114,20 @@ struct CommandLabPlanCanvas: View {
                 )
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
-                    isSelected
-                        ? Color.white.opacity(0.9)
-                        : Color.white.opacity(0.2),
-                    lineWidth: isSelected ? 2 : 1
+                    needsSelection
+                        ? Color.orange
+                        : (
+                            userSelection == nil
+                                ? (
+                                    isSelected
+                                        ? Color.white.opacity(0.9)
+                                        : Color.white.opacity(0.2)
+                                )
+                                : Color.green
+                        ),
+                    lineWidth: needsSelection || userSelection != nil
+                        ? 2
+                        : (isSelected ? 2 : 1)
                 )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -132,6 +146,22 @@ struct CommandLabPlanCanvas: View {
                     )
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
+                }
+                if needsSelection, height > 88 {
+                    Label(
+                        "Needs selection",
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                } else if let userSelection, height > 88 {
+                    Label(
+                        userSelection.localizedApplicationName,
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
@@ -298,6 +328,28 @@ struct CommandLabPlanCanvas: View {
     private func clearGesture() {
         gestureStartPlan = nil
         gestureWindowID = nil
+    }
+
+    private func isAmbiguous(
+        _ state: ArrangementTargetResolutionState?
+    ) -> Bool {
+        guard let state else {
+            return false
+        }
+        if case .ambiguous = state {
+            return true
+        }
+        return false
+    }
+
+    private func selectedTarget(
+        _ state: ArrangementTargetResolutionState?
+    ) -> ResolvedArrangementTarget? {
+        guard case let .resolved(target) = state,
+              target.matchReason == .selectedByUser else {
+            return nil
+        }
+        return target
     }
 
     private func handlePoint(

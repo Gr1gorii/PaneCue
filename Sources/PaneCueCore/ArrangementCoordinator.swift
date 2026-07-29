@@ -28,7 +28,7 @@ public struct ArrangementDraft: Hashable, Identifiable, Sendable {
     }
 }
 
-/// The coarse Apply gate used until slot-level resolution lands in V02-030.
+/// The coarse Apply gate derived from slot-level resolution and plan validity.
 public enum ArrangementPreviewEligibility: Hashable, Sendable {
     case ready
     case blocked
@@ -39,13 +39,16 @@ public enum ArrangementPreviewEligibility: Hashable, Sendable {
 public struct ArrangementPreview: Hashable, Identifiable, Sendable {
     public let draft: ArrangementDraft
     public let eligibility: ArrangementPreviewEligibility
+    public let resolution: ArrangementTargetResolutionSet?
 
     public init(
         draft: ArrangementDraft,
-        eligibility: ArrangementPreviewEligibility
+        eligibility: ArrangementPreviewEligibility,
+        resolution: ArrangementTargetResolutionSet? = nil
     ) {
         self.draft = draft
         self.eligibility = eligibility
+        self.resolution = resolution
     }
 
     public var id: UUID {
@@ -65,8 +68,63 @@ public struct ArrangementPreview: Hashable, Identifiable, Sendable {
     ) -> ArrangementPreview {
         ArrangementPreview(
             draft: draft,
-            eligibility: eligibility
+            eligibility: eligibility,
+            resolution: resolution
         )
+    }
+
+    fileprivate func updating(
+        resolution: ArrangementTargetResolutionSet
+    ) -> ArrangementPreview {
+        ArrangementPreview(
+            draft: draft,
+            eligibility: draft.plan.windows.count >= 2
+                && !resolution.requiresCandidateSelection
+                ? .ready
+                : .blocked,
+            resolution: resolution
+        )
+    }
+
+    fileprivate func updating(plan: WorkspacePlan) -> ArrangementPreview {
+        ArrangementPreview(
+            draft: ArrangementDraft(
+                id: draft.id,
+                source: draft.source,
+                plan: plan
+            ),
+            eligibility: eligibility,
+            resolution: resolution
+        )
+    }
+}
+
+/// The result of the Preview preparation boundary. Legacy callers may return
+/// `.ready` or `.blocked`; Arrange supplies the full slot-level resolution.
+public struct ArrangementPreviewPreparation: Hashable, Sendable {
+    public let eligibility: ArrangementPreviewEligibility
+    public let resolution: ArrangementTargetResolutionSet?
+
+    public static let ready = ArrangementPreviewPreparation(
+        eligibility: .ready
+    )
+    public static let blocked = ArrangementPreviewPreparation(
+        eligibility: .blocked
+    )
+
+    public init(eligibility: ArrangementPreviewEligibility) {
+        self.eligibility = eligibility
+        resolution = nil
+    }
+
+    public init(
+        resolution: ArrangementTargetResolutionSet,
+        isPlanValid: Bool = true
+    ) {
+        self.resolution = resolution
+        eligibility = isPlanValid && !resolution.requiresCandidateSelection
+            ? .ready
+            : .blocked
     }
 }
 
@@ -157,7 +215,7 @@ public enum ArrangementCoordinatorError: LocalizedError, Equatable, Sendable {
 /// from growing independent execution paths.
 public struct ArrangementCoordinatorPipeline: Sendable {
     public typealias PreviewPreparation = @Sendable
-        (ArrangementDraft) async throws -> ArrangementPreviewEligibility
+        (ArrangementDraft) async throws -> ArrangementPreviewPreparation
     public typealias PreviewRevalidation = @Sendable
         (ArrangementPreview) async throws -> ArrangementPreviewEligibility
     public typealias ApplyExecution = @MainActor @Sendable
@@ -273,9 +331,9 @@ public actor ArrangementCoordinator {
             source: source,
             plan: plan
         )
-        let eligibility: ArrangementPreviewEligibility
+        let preparation: ArrangementPreviewPreparation
         do {
-            eligibility = try await pipeline.preparePreview(draft)
+            preparation = try await pipeline.preparePreview(draft)
         } catch {
             guard preparationID == requestID else {
                 throw ArrangementCoordinatorError.preparationSuperseded
@@ -291,10 +349,11 @@ public actor ArrangementCoordinator {
         finishPreparation()
         let preview = ArrangementPreview(
             draft: draft,
-            eligibility: eligibility
+            eligibility: preparation.eligibility,
+            resolution: preparation.resolution
         )
         activePreview = preview
-        phase = phaseForEligibility(eligibility)
+        phase = phaseForEligibility(preparation.eligibility)
         return preview
     }
 
@@ -318,6 +377,51 @@ public actor ArrangementCoordinator {
         let updated = preview.revalidated(as: eligibility)
         activePreview = updated
         phase = phaseForEligibility(eligibility)
+        return updated
+    }
+
+    @discardableResult
+    public func selectCandidate(
+        previewID: UUID,
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) throws -> ArrangementPreview {
+        guard let preview = activePreview,
+              preview.id == previewID else {
+            throw ArrangementCoordinatorError.stalePreview
+        }
+        guard phase == .awaitingSelection || phase == .ready else {
+            throw ArrangementCoordinatorError.applyUnavailable
+        }
+        guard let resolution = preview.resolution else {
+            throw ArrangementTargetSelectionError.slotUnavailable
+        }
+
+        let updatedResolution = try resolution.selecting(
+            candidateID,
+            for: slotID
+        )
+        let updated = preview.updating(resolution: updatedResolution)
+        activePreview = updated
+        phase = phaseForEligibility(updated.eligibility)
+        return updated
+    }
+
+    @discardableResult
+    public func updatePreviewPlan(
+        previewID: UUID,
+        plan: WorkspacePlan
+    ) throws -> ArrangementPreview {
+        guard let preview = activePreview,
+              preview.id == previewID else {
+            throw ArrangementCoordinatorError.stalePreview
+        }
+        guard phase == .awaitingSelection || phase == .ready else {
+            throw ArrangementCoordinatorError.applyUnavailable
+        }
+
+        let updated = preview.updating(plan: plan)
+        activePreview = updated
         return updated
     }
 

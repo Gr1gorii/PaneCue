@@ -232,8 +232,43 @@ public final class WindowManager {
         try applyCustomLayoutDetailed(scenario).summary
     }
 
+    /// Resolves the current local AX inventory for an Arrange Preview.
+    /// Window titles are passed only as in-memory chooser differentiators and
+    /// are never logged or persisted by PaneCue Core.
+    public func previewResolution(
+        for plan: WorkspacePlan
+    ) throws -> ArrangementTargetResolutionSet {
+        let windows = try eligibleWindows()
+        let inventoryPairs = workspaceInventory(from: windows)
+        let differentiators = inventoryPairs.reduce(
+            into: [EphemeralWindowIdentifier: String]()
+        ) { result, pair in
+            let value = pair.window.title.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            if !value.isEmpty {
+                result[
+                    EphemeralWindowIdentifier(rawValue: pair.item.id)
+                ] = value
+            }
+        }
+        return WorkspaceTargetResolver.resolve(
+            scenario: CustomScenario(
+                name: plan.name,
+                windows: plan.windows
+            ),
+            inventory: inventoryPairs.map(\.item),
+            hasExternalDisplay: ScreenGeometry.hasExternalDisplay,
+            hasActiveCall: windows.contains {
+                role(of: $0) == .meeting
+            },
+            localDifferentiators: differentiators
+        )
+    }
+
     public func applyCustomLayoutDetailed(
-        _ scenario: CustomScenario
+        _ scenario: CustomScenario,
+        resolution: ArrangementTargetResolutionSet? = nil
     ) throws -> WorkspaceApplyResult {
         guard hasAccessibilityPermission else {
             throw PaneCueWindowError.accessibilityPermissionRequired
@@ -256,21 +291,7 @@ public final class WindowManager {
 
         var resolved: [ResolvedWindowSelection] = []
         var outcomesBySlot: [UUID: WorkspaceApplyOutcome] = [:]
-        let inventoryPairs = windows.enumerated().map { index, window in
-            let identifier = "candidate-\(index)"
-            return (
-                item: WorkspaceWindowInventoryItem(
-                    id: identifier,
-                    bundleIdentifier: window.bundleIdentifier,
-                    applicationName: window.applicationName,
-                    role: role(of: window),
-                    isMinimized: window.isMinimized,
-                    isFullScreen: window.isFullScreen,
-                    canSetFrame: AXHelpers.canSetFrame(on: window.element)
-                ),
-                window: window
-            )
-        }
+        let inventoryPairs = workspaceInventory(from: windows)
         let windowsByCandidateID = Dictionary(
             uniqueKeysWithValues: inventoryPairs.map {
                 ($0.item.id, $0.window)
@@ -282,7 +303,9 @@ public final class WindowManager {
             hasExternalDisplay: ScreenGeometry.hasExternalDisplay,
             hasActiveCall: windows.contains {
                 role(of: $0) == .meeting
-            }
+            },
+            selectedCandidateIDsBySlot:
+                resolution?.selectedCandidateIDsBySlot ?? [:]
         )
 
         // Resolve from a fresh AX inventory at Apply time. The preview names
@@ -677,6 +700,43 @@ public final class WindowManager {
             applicationName: window.applicationName,
             windowTitle: window.title
         )
+    }
+
+    private func workspaceInventory(
+        from windows: [ManagedWindow]
+    ) -> [(item: WorkspaceWindowInventoryItem, window: ManagedWindow)] {
+        windows.map { window in
+            (
+                item: WorkspaceWindowInventoryItem(
+                    id: ephemeralIdentifier(for: window),
+                    bundleIdentifier: window.bundleIdentifier,
+                    applicationName: window.applicationName,
+                    role: role(of: window),
+                    display: displayTarget(for: window.frame),
+                    isMinimized: window.isMinimized,
+                    isFullScreen: window.isFullScreen,
+                    canSetFrame: AXHelpers.canSetFrame(on: window.element)
+                ),
+                window: window
+            )
+        }
+    }
+
+    private func ephemeralIdentifier(for window: ManagedWindow) -> String {
+        "window-\(window.processIdentifier)-\(CFHash(window.element))"
+    }
+
+    private func displayTarget(for frame: CGRect) -> ScenarioDisplayTarget {
+        guard let external = ScreenGeometry
+            .visibleFrameInAccessibilityCoordinates(for: .external),
+              let main = ScreenGeometry
+                .visibleFrameInAccessibilityCoordinates(for: .main) else {
+            return .main
+        }
+        return ScreenGeometry.overlapArea(frame, external)
+            > ScreenGeometry.overlapArea(frame, main)
+            ? .external
+            : .main
     }
 
     private func blockedWindowOutcome(

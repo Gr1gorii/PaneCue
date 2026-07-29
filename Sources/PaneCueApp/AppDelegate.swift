@@ -17,11 +17,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let appIconController = PaneCueAppIconController()
     private let terminationCoordinator = PaneCueTerminationCoordinator()
     private lazy var arrangeCoordinator = ArrangeCoordinatorController(
-        apply: { [weak self] plan in
+        resolve: { [weak self] plan in
             guard let self else {
                 throw CommandLabError.unavailable
             }
-            return try await executeArrangeApply(plan)
+            return try windowManager.previewResolution(for: plan)
+        },
+        apply: { [weak self] plan, resolution in
+            guard let self else {
+                throw CommandLabError.unavailable
+            }
+            return try await executeArrangeApply(
+                plan,
+                resolution: resolution
+            )
         },
         rollback: { [weak self] in
             guard let self else {
@@ -106,6 +115,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     analysis,
                     savedScenarios: customScenarioStore.scenarios
                 )
+            },
+            prepareWorkspacePlan: { [weak self] plan in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await arrangeCoordinator.preparePlan(plan)
+            },
+            selectArrangementCandidate: {
+                [weak self] previewID, slotID, candidateID in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await arrangeCoordinator.selectCandidate(
+                    previewID: previewID,
+                    slotID: slotID,
+                    candidateID: candidateID
+                )
+            },
+            arrangementState: { [weak self] in
+                guard let self else {
+                    return nil
+                }
+                return await arrangeCoordinator.currentState()
             },
             applyAnalyzedCommand: { [weak self] intent in
                 guard let self else {
@@ -1054,7 +1086,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func executeArrangeApply(
-        _ plan: WorkspacePlan
+        _ plan: WorkspacePlan,
+        resolution: ArrangementTargetResolutionSet?
     ) async throws -> WorkspaceApplyResult {
         guard let scenario = plan.scenario(named: "Arrange") else {
             throw PaneCueWindowError.operationFailed(
@@ -1065,7 +1098,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         beginUserInitiatedScenario()
         await featureProvider.stopVideoCapture()
         try await applicationLauncher.ensureApplications(for: scenario)
-        let result = try windowManager.applyCustomLayoutDetailed(scenario)
+        let result = try windowManager.applyCustomLayoutDetailed(
+            scenario,
+            resolution: resolution
+        )
         updateMenuState(message: result.summary)
         return result
     }
