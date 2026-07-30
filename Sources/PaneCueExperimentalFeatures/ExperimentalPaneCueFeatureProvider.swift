@@ -122,7 +122,7 @@ public final class ExperimentalPaneCueFeatureProvider:
             action: #selector(configureCloudAccessFromMenu)
         )
         let voiceItem = menuItem(
-            title: "Start Voice Command (⌥ Space)",
+            title: "Start Voice Command",
             action: #selector(toggleVoiceCommandFromMenu)
         )
         voiceCommandItem = voiceItem
@@ -177,10 +177,10 @@ public final class ExperimentalPaneCueFeatureProvider:
 
         switch voiceState {
         case .idle:
-            voiceCommandItem?.title = "Start Voice Command (⌥ Space)"
+            voiceCommandItem?.title = "Start Voice Command"
             voiceCommandItem?.isEnabled = true
         case .listening:
-            voiceCommandItem?.title = "Stop and Run Voice Command (⌥ Space)"
+            voiceCommandItem?.title = "Stop and Run Voice Command"
             voiceCommandItem?.isEnabled = true
         case .processing:
             voiceCommandItem?.title = "Voice Command Is Processing…"

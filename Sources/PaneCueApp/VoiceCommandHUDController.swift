@@ -81,7 +81,7 @@ final class VoiceCommandHUDController {
         show(
             symbol: "mic.fill",
             title: "Слушаю…",
-            detail: "⌥ Space — выполнить команду",
+            detail: "Повторите Voice Command, чтобы выполнить",
             tint: .systemRed
         )
     }

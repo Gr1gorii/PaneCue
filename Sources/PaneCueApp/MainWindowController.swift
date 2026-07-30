@@ -723,7 +723,7 @@ private struct PaneCueDashboardView: View {
                     .controlSize(.large)
                     .disabled(model.voiceState == .processing)
 
-                    Text("⌥ Space")
+                    Text("Quick Cue · ⌥ Space")
                         .font(.caption2.monospaced())
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
@@ -1403,7 +1403,7 @@ private struct PaneCueSettingsView: View {
 
                     SettingsGroup(
                         title: "Cloud Voice · Experimental",
-                        detail: "Use Russian or English with the global shortcut."
+                        detail: "Use Russian or English from the Voice Command control."
                     ) {
                     SettingRow(
                         title: "OpenAI API Key",
@@ -1421,8 +1421,8 @@ private struct PaneCueSettingsView: View {
                     Divider()
 
                     SettingRow(
-                        title: "Shortcut",
-                        detail: "Press once to listen, then again to run",
+                        title: "Quick Cue",
+                        detail: "Open a private text field over the current app",
                         systemImage: "keyboard",
                         statusColor: .blue
                     ) {

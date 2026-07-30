@@ -50,11 +50,12 @@ final class CustomScenarioHotKeyController: @unchecked Sendable {
                     nil,
                     &hotKeyID
                 )
-                guard status == noErr,
-                      hotKeyID.signature
-                        == CustomScenarioHotKeyController.signature
-                else {
-                    return status
+                if let rejectionStatus = HotKeyEventRouter.rejectionStatus(
+                    readStatus: status,
+                    receivedSignature: hotKeyID.signature,
+                    expectedSignature: CustomScenarioHotKeyController.signature
+                ) {
+                    return rejectionStatus
                 }
 
                 let controller = Unmanaged<
