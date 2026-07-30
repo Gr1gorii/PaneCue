@@ -12,6 +12,10 @@ let package = Package(
         .executable(
             name: "PaneCueExperimental",
             targets: ["PaneCueExperimental"]
+        ),
+        .executable(
+            name: "PaneCueDialogueBenchmark",
+            targets: ["PaneCueDialogueBenchmark"]
         )
     ],
     targets: [
@@ -37,6 +41,14 @@ let package = Package(
                 "PaneCueExperimentalFeatures"
             ]
         ),
+        .target(
+            name: "PaneCueBenchmarkKit",
+            dependencies: ["PaneCueCore"]
+        ),
+        .executableTarget(
+            name: "PaneCueDialogueBenchmark",
+            dependencies: ["PaneCueBenchmarkKit"]
+        ),
         .testTarget(
             name: "PaneCueCoreTests",
             dependencies: ["PaneCueCore"]
@@ -45,6 +57,7 @@ let package = Package(
             name: "PaneCueTargetStructureTests",
             dependencies: [
                 "PaneCueApp",
+                "PaneCueBenchmarkKit",
                 "PaneCueExperimentalFeatures"
             ]
         )

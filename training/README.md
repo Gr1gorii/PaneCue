@@ -64,3 +64,11 @@ remain on this Mac.
 
 The held-out test split must improve before an adapter is exported into
 PaneCue. A lower validation loss alone is not sufficient.
+
+## Independent v0.2 evaluation
+
+The frozen five-author dialogue corpus is not part of this directory and must
+never be supplied to a training or augmentation script. It is evaluated only
+through `scripts/run_dialogue_benchmark.sh`; see
+`docs/product-freeze/v0.2/dialogue-benchmark.md` for the external, privacy-safe
+corpus contract.

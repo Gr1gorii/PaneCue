@@ -24,3 +24,4 @@ training/tools/
 training/ollama/**/*.gguf
 training/**/*.gguf
 training/**/*.safetensors
+.panecue-evaluation/

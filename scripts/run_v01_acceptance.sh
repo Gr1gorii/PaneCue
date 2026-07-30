@@ -27,6 +27,9 @@ echo "[1/7] Running automated acceptance and regression tests"
 swift test --package-path "${PROJECT_DIR}"
 swift build --package-path "${PROJECT_DIR}" --product PaneCue
 swift build --package-path "${PROJECT_DIR}" --product PaneCueExperimental
+swift build \
+    --package-path "${PROJECT_DIR}" \
+    --product PaneCueDialogueBenchmark
 
 echo "[2/7] Packaging the stable v0.2 development candidate"
 "${PROJECT_DIR}/scripts/package_app.sh"
