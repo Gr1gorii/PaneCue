@@ -81,6 +81,82 @@ struct QuickCuePanelTests {
     }
 
     @Test
+    func voiceIsUnavailableUntilTextOnboardingCompletes() {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+
+        #expect(session.requestVoiceStart(isAvailable: false) == nil)
+        #expect(session.phase == .composing)
+        #expect(session.draft == "x")
+        #expect(session.submitCommand() == .preparePreview("x"))
+    }
+
+    @Test
+    func voiceTranscriptRequiresEditableConfirmationBeforePreview() {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+
+        #expect(
+            session.requestVoiceStart(isAvailable: true) == .startVoice
+        )
+        #expect(session.phase == .requestingVoice)
+        let didStart = session.finishVoiceStart()
+        #expect(didStart)
+        #expect(session.phase == .recording)
+        #expect(session.requestVoiceStop() == .stopAndTranscribe)
+        #expect(session.phase == .transcribing)
+        let didTranscribe = session.finishVoiceTranscription("y")
+        #expect(didTranscribe)
+
+        #expect(session.phase == .composing)
+        #expect(session.preview == nil)
+        #expect(session.draft == "y")
+        #expect(session.transcriptNeedsConfirmation)
+
+        session.updateDraft("z")
+        #expect(session.draft == "z")
+        #expect(session.submitCommand() == .preparePreview("z"))
+        #expect(!session.transcriptNeedsConfirmation)
+    }
+
+    @Test
+    func deniedOrCancelledVoiceKeepsTextInputUsable() {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+
+        _ = session.requestVoiceStart(isAvailable: true)
+        session.failVoiceStart("permission denied")
+        #expect(session.phase == .composing)
+        #expect(session.draft == "x")
+        #expect(session.errorMessage == "permission denied")
+
+        _ = session.requestVoiceStart(isAvailable: true)
+        _ = session.finishVoiceStart()
+        session.cancelVoice()
+        #expect(session.phase == .composing)
+        #expect(session.draft == "x")
+        #expect(session.submitCommand() == .preparePreview("x"))
+    }
+
+    @Test
+    func dismissClearsEveryVoiceOperationState() {
+        var session = QuickCuePanelSession()
+        session.present()
+        _ = session.requestVoiceStart(isAvailable: true)
+        _ = session.finishVoiceStart()
+
+        #expect(session.isVoiceOperationActive)
+        session.dismiss()
+        #expect(!session.isPresented)
+        #expect(!session.isVoiceOperationActive)
+        #expect(session.phase == .composing)
+        #expect(session.draft.isEmpty)
+    }
+
+    @Test
     func previewPresentationExplainsEverySlotWithoutCommandText() throws {
         let presentation = QuickCuePreviewPresentation(
             preview: makeQuickCuePreview()

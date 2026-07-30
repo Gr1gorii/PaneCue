@@ -346,9 +346,7 @@ final class PaneCueDashboardModel: ObservableObject {
         do {
             let result = try await actions.applyWorkspacePlan(plan)
             arrangementPreview = await actions.arrangementState()?.preview
-            if result.didChangeAnyWindow {
-                completeTextOnboarding()
-            }
+            recordSuccessfulTextArrangement(result)
             return result
         } catch {
             arrangementPreview = await actions.arrangementState()?.preview
@@ -425,6 +423,15 @@ final class PaneCueDashboardModel: ObservableObject {
     @discardableResult
     func resetPersonalization() -> Int {
         actions.resetPersonalization()
+    }
+
+    func recordSuccessfulTextArrangement(
+        _ result: WorkspaceApplyResult
+    ) {
+        guard result.didChangeAnyWindow else {
+            return
+        }
+        completeTextOnboarding()
     }
 
     private func completeTextOnboarding() {

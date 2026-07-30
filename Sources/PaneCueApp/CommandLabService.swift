@@ -4,6 +4,7 @@ import PaneCueCore
 
 enum CommandLabError: LocalizedError {
     case unavailable
+    case recordingAlreadyActive
     case microphonePermissionRequired
     case recordingTooShort
 
@@ -11,6 +12,8 @@ enum CommandLabError: LocalizedError {
         switch self {
         case .unavailable:
             return "Arrange is temporarily unavailable."
+        case .recordingAlreadyActive:
+            return "Another voice recording is already active."
         case .microphonePermissionRequired:
             return "Enable PaneCue in System Settings → Privacy & Security → Microphone."
         case .recordingTooShort:
@@ -163,7 +166,7 @@ final class CommandLabService {
 
     func startListening() async throws {
         guard !isListening else {
-            return
+            throw CommandLabError.recordingAlreadyActive
         }
         guard await requestMicrophoneAccessIfNeeded() else {
             throw CommandLabError.microphonePermissionRequired

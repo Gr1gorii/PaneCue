@@ -44,6 +44,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private lazy var quickCue = QuickCuePanelController(
         actions: QuickCuePanelActions(
+            isVoiceAvailable: { [weak self] in
+                self?.mainWindow.model.hasCompletedTextOnboarding
+                    ?? false
+            },
+            startVoice: { [weak self] in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                guard featureProvider.voiceState == .idle else {
+                    throw CommandLabError.unavailable
+                }
+                try await commandLab.startListening()
+            },
+            stopVoice: { [weak self] in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await commandLab.stopAndTranscribe()
+            },
+            cancelVoice: { [weak self] in
+                self?.commandLab.cancelListening()
+            },
             preparePreview: { [weak self] command in
                 guard let self else {
                     throw CommandLabError.unavailable
@@ -54,7 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else {
                     throw CommandLabError.unavailable
                 }
-                return try await arrangeCoordinator.apply(preview.plan)
+                let result = try await arrangeCoordinator.apply(
+                    preview.plan
+                )
+                mainWindow.model.recordSuccessfulTextArrangement(
+                    result
+                )
+                return result
             },
             rollback: { [weak self] in
                 guard let self else {
