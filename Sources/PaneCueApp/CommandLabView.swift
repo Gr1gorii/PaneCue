@@ -45,6 +45,12 @@ struct CommandLabView: View {
             }
             model.discardArrangementPreview()
         }
+        .onAppear {
+            adoptExternalPreview()
+        }
+        .onChange(of: model.arrangementEditorSeed?.id) { _, _ in
+            adoptExternalPreview()
+        }
     }
 
     private var header: some View {
@@ -613,6 +619,25 @@ struct CommandLabView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func adoptExternalPreview() {
+        guard let preview = model.arrangementEditorSeed else {
+            return
+        }
+        transcript = ""
+        lastAnalyzedTranscript = ""
+        analyzedIntent = nil
+        workspacePlan = preview.plan
+        planHistory = []
+        hasAnalyzed = true
+        isAnalyzing = false
+        isApplying = false
+        feedback = "Opened from Quick Cue"
+        errorMessage = nil
+        applyResult = nil
+        didRollback = false
+        model.consumeArrangementEditorSeed(preview.id)
     }
 
     private func toggleListening() {

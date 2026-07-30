@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import Foundation
+import PaneCueCore
 import Testing
 @testable import PaneCueApp
 
@@ -59,6 +60,44 @@ struct QuickCuePanelTests {
     }
 
     @Test
+    func enterCreatesOnlyAPreviewEffect() throws {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+
+        let submitEffect = session.submitCommand()
+        #expect(submitEffect == .preparePreview("x"))
+        #expect(session.phase == .preparing)
+        let prematureApply = session.requestApply()
+        #expect(prematureApply == nil)
+
+        let preview = makeQuickCuePreview()
+        let didFinishPreview = session.finishPreview(preview)
+        #expect(didFinishPreview)
+        #expect(session.phase == .preview)
+        let applyEffect = session.requestApply()
+        #expect(applyEffect == .apply(preview))
+        #expect(session.phase == .applying)
+    }
+
+    @Test
+    func previewPresentationExplainsEverySlotWithoutCommandText() throws {
+        let presentation = QuickCuePreviewPresentation(
+            preview: makeQuickCuePreview()
+        )
+
+        #expect(presentation.title == "Preview · 2 windows")
+        #expect(presentation.canApply)
+        #expect(presentation.slots.count == 2)
+        #expect(presentation.slots.allSatisfy { $0.state == "Ready" })
+        #expect(presentation.slots[0].display == "Main display")
+        #expect(
+            presentation.slots[0].detail
+                == "Browser · Matched role: Browser"
+        )
+    }
+
+    @Test
     func pointerDisplayWinsAndFallbackIsDeterministic() {
         let frames = [
             CGRect(x: 0, y: 0, width: 1_200, height: 800),
@@ -105,4 +144,39 @@ struct QuickCuePanelTests {
         #expect(panelFrame.midX == visibleFrame.midX)
         #expect(panelFrame.midY > visibleFrame.midY)
     }
+}
+
+private func makeQuickCuePreview() -> ArrangementPreview {
+    let plan = WorkspacePlan.tiled(
+        targets: [
+            ScenarioWindowTarget(role: .browser),
+            ScenarioWindowTarget(role: .notes)
+        ]
+    )
+    let names = ["Browser", "Notes"]
+    let roles: [ApplicationRole] = [.browser, .notes]
+    let slots = zip(plan.windows.indices, plan.windows).map { index, slot in
+        ArrangementSlotResolution(
+            id: slot.id,
+            state: .resolved(
+                ResolvedArrangementTarget(
+                    bundleIdentifier: "com.example.app\(index)",
+                    windowIdentifier: EphemeralWindowIdentifier(
+                        rawValue: "window-\(index)"
+                    ),
+                    display: slot.display,
+                    matchReason: .matchedRole(roles[index]),
+                    localizedApplicationName: names[index]
+                )
+            )
+        )
+    }
+    return ArrangementPreview(
+        draft: ArrangementDraft(
+            source: .quickCue,
+            plan: plan
+        ),
+        eligibility: .ready,
+        resolution: ArrangementTargetResolutionSet(slots: slots)
+    )
 }

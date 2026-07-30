@@ -78,6 +78,23 @@ struct ArrangeCoordinatorControllerTests {
     }
 
     @Test
+    func quickCueTextCreatesPreviewWithoutApply() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+
+        _ = try await controller.prepare(
+            .plan(makeArrangePlan(), summary: "Preview ready"),
+            source: .quickCue
+        )
+
+        let state = await controller.currentState()
+        #expect(state.phase == .ready)
+        #expect(state.preview?.source == .quickCue)
+        #expect(await recorder.applyCount() == 0)
+        #expect(await recorder.rollbackCount() == 0)
+    }
+
+    @Test
     func savedCuePreviewUsesSavedCueMappingReasons() async throws {
         let recorder = ArrangeExecutionRecorder()
         let savedCue = CustomScenario(

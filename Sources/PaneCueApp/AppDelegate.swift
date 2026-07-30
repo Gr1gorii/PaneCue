@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let offlinePack = OfflinePackManager()
     private let commandLab = CommandLabService()
     private let voiceHUD = VoiceCommandHUDController()
-    private let quickCue = QuickCuePanelController()
     private let appIconController = PaneCueAppIconController()
     private let terminationCoordinator = PaneCueTerminationCoordinator()
     private lazy var arrangeCoordinator = ArrangeCoordinatorController(
@@ -42,6 +41,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return try await executeArrangeRollback()
         }
+    )
+    private lazy var quickCue = QuickCuePanelController(
+        actions: QuickCuePanelActions(
+            preparePreview: { [weak self] command in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await prepareQuickCuePreview(command)
+            },
+            applyPreview: { [weak self] preview in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await arrangeCoordinator.apply(preview.plan)
+            },
+            rollback: { [weak self] in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await arrangeCoordinator.rollback()
+            },
+            editFullPlan: { [weak self] preview in
+                self?.mainWindow.show(preview: preview)
+            },
+            discardPreview: { [weak self] in
+                await self?.discardQuickCuePreview()
+            }
+        )
     )
     private lazy var mainWindow = MainWindowController(
         store: customScenarioStore,
@@ -661,6 +688,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             updateMenuState(message: error.localizedDescription)
         }
+    }
+
+    private func prepareQuickCuePreview(
+        _ command: String
+    ) async throws -> ArrangementPreview {
+        let analysis = try await commandLab.analyze(
+            transcript: command,
+            currentPlan: nil,
+            scenarios: voiceScenarioReferences,
+            savedScenarios: customScenarioStore.scenarios,
+            offlinePack: offlinePack
+        )
+        try Task.checkCancellation()
+        let prepared = try await arrangeCoordinator.prepare(
+            analysis,
+            source: .quickCue,
+            savedScenarios: customScenarioStore.scenarios
+        )
+        guard case let .plan(plan, _) = prepared else {
+            await arrangeCoordinator.discard()
+            throw QuickCueTextFlowError.previewUnavailable
+        }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            await discardQuickCuePreview(id: plan.id)
+            throw error
+        }
+        guard let preview = await arrangeCoordinator
+            .currentState().preview,
+              preview.id == plan.id else {
+            await discardQuickCuePreview(id: plan.id)
+            throw QuickCueTextFlowError.previewUnavailable
+        }
+        return preview
+    }
+
+    private func discardQuickCuePreview(id: UUID? = nil) async {
+        let state = await arrangeCoordinator.currentState()
+        guard let preview = state.preview,
+              preview.source == .quickCue,
+              id == nil || preview.id == id else {
+            return
+        }
+        await arrangeCoordinator.discard()
     }
 
     private func configureCustomScenarioHotKeys() {

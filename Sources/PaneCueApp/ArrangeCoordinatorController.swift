@@ -76,11 +76,12 @@ final class ArrangeCoordinatorController {
 
     func prepare(
         _ analysis: CommandLabAnalysis,
+        source: ArrangementRequestSource = .arrange,
         savedScenarios: [CustomScenario] = []
     ) async throws -> CommandLabAnalysis {
         switch analysis {
         case let .plan(plan, summary):
-            let preview = try await prepare(plan, source: .arrange)
+            let preview = try await prepare(plan, source: source)
             return .plan(preview.plan, summary: summary)
         case let .action(intent):
             if let plan = WorkspacePlan.from(
@@ -89,9 +90,10 @@ final class ArrangeCoordinatorController {
             ) {
                 let preview = try await prepare(
                     plan,
-                    source: intent.action == .applyCustomScenario
+                    source: source == .arrange
+                        && intent.action == .applyCustomScenario
                         ? .savedCue
-                        : .arrange
+                        : source
                 )
                 return .plan(
                     preview.plan,
