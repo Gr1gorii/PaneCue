@@ -25,6 +25,28 @@ struct TargetStructureTests {
                 #".executableTarget(name:"PaneCue",dependencies:["PaneCueExperimentalFeatures"]"#
             )
         )
+        #expect(
+            !manifest.contains(
+                #".executableTarget(name:"PaneCue",dependencies:["PaneCueBenchmarkKit"]"#
+            )
+        )
+    }
+
+    @Test
+    func dialogueBenchmarkRemainsExternalAndAggregateOnly() throws {
+        let manifest = try sourceText(at: "Package.swift")
+        let ignore = try sourceText(at: ".gitignore")
+        let runner = try sourceText(
+            at: "Sources/PaneCueDialogueBenchmark/main.swift"
+        )
+        let ci = try sourceText(at: ".github/workflows/ci.yml")
+
+        #expect(manifest.contains("PaneCueDialogueBenchmark"))
+        #expect(manifest.contains("PaneCueBenchmarkKit"))
+        #expect(ignore.contains(".panecue-evaluation/"))
+        #expect(runner.contains("corpusMustBeExternal"))
+        #expect(!runner.contains("utterance"))
+        #expect(ci.contains("PaneCueDialogueBenchmark"))
     }
 
     @Test

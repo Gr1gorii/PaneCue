@@ -29,6 +29,9 @@ jobs:
       - name: Run tests
         run: swift test
 
+      - name: Build private-corpus benchmark runner
+        run: swift build --product PaneCueDialogueBenchmark
+
       - name: Package stable app
         run: ./scripts/package_app.sh
 
