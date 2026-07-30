@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let offlinePack = OfflinePackManager()
     private let commandLab = CommandLabService()
     private let voiceHUD = VoiceCommandHUDController()
+    private let quickCue = QuickCuePanelController()
     private let appIconController = PaneCueAppIconController()
     private let terminationCoordinator = PaneCueTerminationCoordinator()
     private lazy var arrangeCoordinator = ArrangeCoordinatorController(
@@ -317,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        quickCue.dismiss()
         appIconController.stop()
     }
 
@@ -366,6 +368,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
+        applicationMenu.addItem(.separator())
+        let quickCueItem = applicationMenu.addItem(
+            withTitle: "Quick Cue…",
+            action: #selector(showQuickCue),
+            keyEquivalent: ""
+        )
+        quickCueItem.target = self
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(
             withTitle: "Hide PaneCue",
@@ -482,6 +491,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         openItem.target = self
         menu.addItem(openItem)
+
+        let quickCueItem = NSMenuItem(
+            title: "Quick Cue  ⌥ Space",
+            action: #selector(showQuickCue),
+            keyEquivalent: ""
+        )
+        quickCueItem.target = self
+        menu.addItem(quickCueItem)
         menu.addItem(.separator())
 
         statusLineItem = NSMenuItem(title: "PaneCue is starting…", action: nil, keyEquivalent: "")
@@ -638,14 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             globalHotKey = try GlobalHotKeyController { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self else {
-                        return
-                    }
-                    if self.featureProvider.isExperimental {
-                        self.toggleVoiceCommand()
-                    } else {
-                        self.mainWindow.show(section: .arrange)
-                    }
+                    self?.quickCue.present()
                 }
             }
         } catch {
@@ -739,6 +749,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc
     private func showMainWindow() {
         mainWindow.show()
+    }
+
+    @objc
+    private func showQuickCue() {
+        quickCue.present()
     }
 
     @objc

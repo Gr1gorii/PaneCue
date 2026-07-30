@@ -50,6 +50,29 @@ struct TargetStructureTests {
     }
 
     @Test
+    func quickCueShortcutStaysEphemeralAndLocal() throws {
+        let appDelegate = try sourceText(
+            at: "Sources/PaneCueApp/AppDelegate.swift"
+        )
+        let panel = try sourceText(
+            at: "Sources/PaneCueApp/QuickCuePanelController.swift"
+        )
+        let session = try sourceText(
+            at: "Sources/PaneCueApp/QuickCuePanelSession.swift"
+        )
+
+        #expect(appDelegate.contains("self?.quickCue.present()"))
+        #expect(panel.contains("NSApp.activate(ignoringOtherApps: true)"))
+        #expect(panel.contains("panel.makeKeyAndOrderFront(nil)"))
+        #expect(panel.contains("panel.makeFirstResponder(commandField)"))
+        #expect(panel.contains("cancelOperation"))
+        #expect(!panel.contains("UserDefaults"))
+        #expect(!panel.contains("Logger"))
+        #expect(!session.contains("UserDefaults"))
+        #expect(!session.contains("Logger"))
+    }
+
+    @Test
     func experimentalImplementationsLiveOutsideStableSources() {
         let stableSources = repositoryRoot
             .appendingPathComponent("Sources/PaneCueApp")
@@ -169,7 +192,7 @@ struct TargetStructureTests {
             .filter { !$0.isSeparatorItem }
             .map(\.title)
         #expect(titles.contains("OpenAI API Key…"))
-        #expect(titles.contains("Start Voice Command (⌥ Space)"))
+        #expect(titles.contains("Start Voice Command"))
         #expect(titles.contains("Suggestions Beta"))
         #expect(titles.contains("Code + Call"))
         #expect(titles.contains("Documentation + Code"))

@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import Foundation
+import OSLog
 
 enum GlobalHotKeyError: LocalizedError {
     case installationFailed(OSStatus)
@@ -8,7 +9,7 @@ enum GlobalHotKeyError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .installationFailed(status):
-            return "PaneCue could not install the voice shortcut handler (\(status))."
+            return "PaneCue could not install the Quick Cue shortcut handler (\(status))."
         case let .registrationFailed(status):
             return "PaneCue could not register ⌥ Space (\(status))."
         }
@@ -18,6 +19,10 @@ enum GlobalHotKeyError: LocalizedError {
 final class GlobalHotKeyController: @unchecked Sendable {
     private static let signature: OSType = 0x50437565
     private static let identifier: UInt32 = 1
+    private static let logger = Logger(
+        subsystem: "io.github.gr1gorii.PaneCue",
+        category: "QuickCueHotKey"
+    )
 
     private let action: @Sendable () -> Void
     private var hotKeyReference: EventHotKeyRef?
@@ -48,16 +53,20 @@ final class GlobalHotKeyController: @unchecked Sendable {
                     nil,
                     &hotKeyID
                 )
-                guard status == noErr,
-                      hotKeyID.signature == GlobalHotKeyController.signature,
-                      hotKeyID.id == GlobalHotKeyController.identifier
-                else {
-                    return status
+                if let rejectionStatus = HotKeyEventRouter.rejectionStatus(
+                    readStatus: status,
+                    receivedSignature: hotKeyID.signature,
+                    expectedSignature: GlobalHotKeyController.signature,
+                    receivedIdentifier: hotKeyID.id,
+                    expectedIdentifier: GlobalHotKeyController.identifier
+                ) {
+                    return rejectionStatus
                 }
 
                 let controller = Unmanaged<GlobalHotKeyController>
                     .fromOpaque(userData)
                     .takeUnretainedValue()
+                GlobalHotKeyController.logger.notice("Quick Cue hotkey received")
                 controller.action()
                 return noErr
             },
@@ -68,6 +77,7 @@ final class GlobalHotKeyController: @unchecked Sendable {
         )
 
         guard handlerStatus == noErr else {
+            Self.logger.error("Quick Cue hotkey handler installation failed")
             throw GlobalHotKeyError.installationFailed(handlerStatus)
         }
 
@@ -85,12 +95,14 @@ final class GlobalHotKeyController: @unchecked Sendable {
         )
 
         guard registrationStatus == noErr else {
+            Self.logger.error("Quick Cue hotkey registration failed")
             if let eventHandlerReference {
                 RemoveEventHandler(eventHandlerReference)
             }
             self.eventHandlerReference = nil
             throw GlobalHotKeyError.registrationFailed(registrationStatus)
         }
+        Self.logger.notice("Quick Cue hotkey registered")
     }
 
     deinit {

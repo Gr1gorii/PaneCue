@@ -154,7 +154,7 @@ final class OpenAIAPIKeySettingsController: NSObject, NSTextFieldDelegate {
         let confirmation = NSAlert()
         confirmation.alertStyle = .informational
         confirmation.messageText = "API key saved"
-        confirmation.informativeText = "The key is now in macOS Keychain. Press ⌥ Space to start a voice command."
+        confirmation.informativeText = "The key is now in macOS Keychain. Use Voice Command from PaneCue when Cloud mode is selected."
         confirmation.addButton(withTitle: "OK")
         confirmation.runModal()
     }
