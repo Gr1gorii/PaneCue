@@ -115,6 +115,7 @@ final class PaneCueDashboardModel: ObservableObject {
     @Published private(set) var editorRevision = 0
     @Published private(set) var arrangementRevision = 0
     @Published private(set) var arrangementPreview: ArrangementPreview?
+    @Published private(set) var arrangementEditorSeed: ArrangementPreview?
     @Published var isOnboardingPresented: Bool
 
     let applications: [InstalledApplication]
@@ -209,13 +210,30 @@ final class PaneCueDashboardModel: ObservableObject {
     func startNewArrangement() {
         actions.beginArrangement()
         arrangementPreview = nil
+        arrangementEditorSeed = nil
         arrangementRevision += 1
         selectedSection = .arrange
     }
 
     func discardArrangementPreview() {
         arrangementPreview = nil
+        arrangementEditorSeed = nil
         actions.discardArrangement()
+    }
+
+    func stageArrangementPreviewForEditor(
+        _ preview: ArrangementPreview
+    ) {
+        arrangementPreview = preview
+        arrangementEditorSeed = preview
+        selectedSection = .arrange
+    }
+
+    func consumeArrangementEditorSeed(_ previewID: UUID) {
+        guard arrangementEditorSeed?.id == previewID else {
+            return
+        }
+        arrangementEditorSeed = nil
     }
 
     func saveScenarios(_ updatedScenarios: [CustomScenario]) {
@@ -498,6 +516,11 @@ final class MainWindowController {
             window.makeKeyAndOrderFront(nil)
             scheduleInitialFrameValidation(of: window)
         }
+    }
+
+    func show(preview: ArrangementPreview) {
+        model.stageArrangementPreviewForEditor(preview)
+        show(section: .arrange)
     }
 
     func update(_ snapshot: PaneCueDashboardSnapshot) {
