@@ -3,6 +3,9 @@ import PaneCueCore
 
 enum QuickCuePanelPhase: Equatable, Sendable {
     case composing
+    case requestingVoice
+    case recording
+    case transcribing
     case preparing
     case preview
     case applying
@@ -12,6 +15,8 @@ enum QuickCuePanelPhase: Equatable, Sendable {
 }
 
 enum QuickCuePanelEffect: Equatable, Sendable {
+    case startVoice
+    case stopAndTranscribe
     case preparePreview(String)
     case apply(ArrangementPreview)
     case rollback
@@ -25,9 +30,20 @@ struct QuickCuePanelSession: Equatable, Sendable {
     private(set) var applyResult: WorkspaceApplyResult?
     private(set) var statusMessage: String?
     private(set) var errorMessage: String?
+    private(set) var transcriptNeedsConfirmation = false
+    private var draftBeforeVoice: String?
 
     var canEditCommand: Bool {
         phase == .composing
+    }
+
+    var isVoiceOperationActive: Bool {
+        switch phase {
+        case .requestingVoice, .recording, .transcribing:
+            return true
+        default:
+            return false
+        }
     }
 
     mutating func present() {
@@ -39,6 +55,89 @@ struct QuickCuePanelSession: Equatable, Sendable {
             return
         }
         draft = value
+        errorMessage = nil
+    }
+
+    mutating func requestVoiceStart(
+        isAvailable: Bool
+    ) -> QuickCuePanelEffect? {
+        guard isPresented,
+              phase == .composing,
+              isAvailable else {
+            return nil
+        }
+        draftBeforeVoice = draft
+        transcriptNeedsConfirmation = false
+        errorMessage = nil
+        phase = .requestingVoice
+        return .startVoice
+    }
+
+    @discardableResult
+    mutating func finishVoiceStart() -> Bool {
+        guard isPresented, phase == .requestingVoice else {
+            return false
+        }
+        phase = .recording
+        return true
+    }
+
+    mutating func failVoiceStart(_ message: String) {
+        guard isPresented, phase == .requestingVoice else {
+            return
+        }
+        restoreDraftBeforeVoice()
+        phase = .composing
+        errorMessage = message
+    }
+
+    mutating func requestVoiceStop() -> QuickCuePanelEffect? {
+        guard isPresented, phase == .recording else {
+            return nil
+        }
+        phase = .transcribing
+        return .stopAndTranscribe
+    }
+
+    @discardableResult
+    mutating func finishVoiceTranscription(_ value: String) -> Bool {
+        guard isPresented, phase == .transcribing else {
+            return false
+        }
+        let transcript = value.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !transcript.isEmpty else {
+            failVoiceTranscription(
+                "PaneCue could not recognize the offline voice command."
+            )
+            return false
+        }
+        draft = transcript
+        draftBeforeVoice = nil
+        transcriptNeedsConfirmation = true
+        errorMessage = nil
+        phase = .composing
+        return true
+    }
+
+    mutating func failVoiceTranscription(_ message: String) {
+        guard isPresented, phase == .transcribing else {
+            return
+        }
+        restoreDraftBeforeVoice()
+        transcriptNeedsConfirmation = false
+        phase = .composing
+        errorMessage = message
+    }
+
+    mutating func cancelVoice() {
+        guard isPresented, isVoiceOperationActive else {
+            return
+        }
+        restoreDraftBeforeVoice()
+        transcriptNeedsConfirmation = false
+        phase = .composing
         errorMessage = nil
     }
 
@@ -57,6 +156,8 @@ struct QuickCuePanelSession: Equatable, Sendable {
         applyResult = nil
         statusMessage = nil
         errorMessage = nil
+        transcriptNeedsConfirmation = false
+        draftBeforeVoice = nil
         phase = .preparing
         return .preparePreview(command)
     }
@@ -143,6 +244,15 @@ struct QuickCuePanelSession: Equatable, Sendable {
         applyResult = nil
         statusMessage = nil
         errorMessage = nil
+        transcriptNeedsConfirmation = false
+        draftBeforeVoice = nil
+    }
+
+    private mutating func restoreDraftBeforeVoice() {
+        if let draftBeforeVoice {
+            draft = draftBeforeVoice
+        }
+        self.draftBeforeVoice = nil
     }
 }
 

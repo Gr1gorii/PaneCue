@@ -2,6 +2,10 @@ import AppKit
 import PaneCueCore
 
 struct QuickCuePanelActions {
+    let isVoiceAvailable: @MainActor () -> Bool
+    let startVoice: @MainActor () async throws -> Void
+    let stopVoice: @MainActor () async throws -> String
+    let cancelVoice: @MainActor () -> Void
     let preparePreview: @MainActor
         (String) async throws -> ArrangementPreview
     let applyPreview: @MainActor
@@ -158,6 +162,16 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
         switch session.phase {
         case .composing:
+            if session.transcriptNeedsConfirmation {
+                contentStack.addArrangedSubview(makeMessageRow(
+                    "Transcript ready · edit it before Preview",
+                    systemImage: "text.cursor",
+                    color: .controlAccentColor
+                ))
+                contentStack.addArrangedSubview(
+                    makeTranscriptConfirmationButtons()
+                )
+            }
             if let error = session.errorMessage {
                 contentStack.addArrangedSubview(makeMessageRow(
                     error,
@@ -165,6 +179,23 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                     color: .systemOrange
                 ))
             }
+        case .requestingVoice:
+            contentStack.addArrangedSubview(makeProgressRow(
+                "Preparing microphone and offline speech…"
+            ))
+            contentStack.addArrangedSubview(makeVoiceCancelButtons())
+        case .recording:
+            contentStack.addArrangedSubview(makeMessageRow(
+                "Recording locally…",
+                systemImage: "waveform.circle.fill",
+                color: .systemRed
+            ))
+            contentStack.addArrangedSubview(makeRecordingButtons())
+        case .transcribing:
+            contentStack.addArrangedSubview(makeProgressRow(
+                "Transcribing on this Mac…"
+            ))
+            contentStack.addArrangedSubview(makeVoiceCancelButtons())
         case .preparing:
             contentStack.addArrangedSubview(makeProgressRow(
                 "Creating a safe Preview…"
@@ -216,7 +247,12 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     private var preferredHeight: CGFloat {
         switch session.phase {
         case .composing:
+            if session.transcriptNeedsConfirmation {
+                return session.errorMessage == nil ? 166 : 208
+            }
             return session.errorMessage == nil ? 84 : 126
+        case .requestingVoice, .recording, .transcribing:
+            return 166
         case .preparing:
             return 126
         case .preview, .applying:
@@ -249,14 +285,34 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             symbolView.heightAnchor.constraint(equalToConstant: 28)
         ])
 
+        var trailingViews: [NSView] = []
+        if session.phase == .composing, actions.isVoiceAvailable() {
+            let microphone = NSButton(
+                image: NSImage(
+                    systemSymbolName: "mic.fill",
+                    accessibilityDescription: "Start offline voice"
+                ) ?? NSImage(),
+                target: self,
+                action: #selector(startVoice)
+            )
+            microphone.bezelStyle = .texturedRounded
+            microphone.isBordered = false
+            microphone.contentTintColor = .controlAccentColor
+            microphone.setAccessibilityLabel("Start offline voice")
+            trailingViews.append(microphone)
+        }
+
         let hint = NSTextField(
             labelWithString: session.canEditCommand ? "↵" : "esc"
         )
         hint.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         hint.textColor = .tertiaryLabelColor
         hint.setContentHuggingPriority(.required, for: .horizontal)
+        trailingViews.append(hint)
 
-        let row = NSStackView(views: [symbolView, commandField, hint])
+        let row = NSStackView(
+            views: [symbolView, commandField] + trailingViews
+        )
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 16
@@ -359,6 +415,37 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         apply.keyEquivalent = "\r"
         apply.keyEquivalentModifierMask = [.command]
         return makeButtonRow([cancel, edit, apply])
+    }
+
+    private func makeTranscriptConfirmationButtons() -> NSView {
+        let createPreview = makeButton(
+            title: "Create Preview",
+            action: #selector(confirmTranscript)
+        )
+        createPreview.bezelColor = .controlAccentColor
+        return makeButtonRow([createPreview])
+    }
+
+    private func makeRecordingButtons() -> NSView {
+        let cancel = makeButton(
+            title: "Cancel",
+            action: #selector(cancelVoice)
+        )
+        let stop = makeButton(
+            title: "Stop & Transcribe",
+            action: #selector(stopVoice)
+        )
+        stop.bezelColor = .systemRed
+        return makeButtonRow([cancel, stop])
+    }
+
+    private func makeVoiceCancelButtons() -> NSView {
+        makeButtonRow([
+            makeButton(
+                title: "Cancel",
+                action: #selector(cancelVoice)
+            )
+        ])
     }
 
     private func makeResultView() -> NSView {
@@ -490,6 +577,94 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         return row
     }
 
+    @objc
+    private func startVoice() {
+        guard session.requestVoiceStart(
+            isAvailable: actions.isVoiceAvailable()
+        ) == .startVoice else {
+            NSSound.beep()
+            return
+        }
+        render()
+        operationTask?.cancel()
+        operationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await actions.startVoice()
+                try Task.checkCancellation()
+                guard session.finishVoiceStart() else {
+                    actions.cancelVoice()
+                    return
+                }
+                render()
+            } catch is CancellationError {
+                actions.cancelVoice()
+            } catch {
+                actions.cancelVoice()
+                guard !Task.isCancelled else {
+                    return
+                }
+                session.failVoiceStart(error.localizedDescription)
+                render()
+                panel.makeFirstResponder(commandField)
+            }
+        }
+    }
+
+    @objc
+    private func stopVoice() {
+        guard session.requestVoiceStop() == .stopAndTranscribe else {
+            NSSound.beep()
+            return
+        }
+        render()
+        operationTask?.cancel()
+        operationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let transcript = try await actions.stopVoice()
+                try Task.checkCancellation()
+                guard session.finishVoiceTranscription(transcript) else {
+                    return
+                }
+                render()
+                panel.makeFirstResponder(commandField)
+            } catch is CancellationError {
+                actions.cancelVoice()
+            } catch {
+                actions.cancelVoice()
+                guard !Task.isCancelled else {
+                    return
+                }
+                session.failVoiceTranscription(error.localizedDescription)
+                render()
+                panel.makeFirstResponder(commandField)
+            }
+        }
+    }
+
+    @objc
+    private func cancelVoice() {
+        guard session.isVoiceOperationActive else {
+            return
+        }
+        operationTask?.cancel()
+        operationTask = nil
+        actions.cancelVoice()
+        session.cancelVoice()
+        render()
+        panel.makeFirstResponder(commandField)
+    }
+
+    @objc
+    private func confirmTranscript() {
+        submitCommand()
+    }
+
     private func submitCommand() {
         commandField.stringValue = session.draft
         guard case let .preparePreview(command) = session.submitCommand()
@@ -587,8 +762,12 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     }
 
     private func dismiss(discardPreview: Bool) {
+        let wasUsingVoice = session.isVoiceOperationActive
         operationTask?.cancel()
         operationTask = nil
+        if wasUsingVoice {
+            actions.cancelVoice()
+        }
         session.dismiss()
         commandField.stringValue = ""
         panel.orderOut(nil)

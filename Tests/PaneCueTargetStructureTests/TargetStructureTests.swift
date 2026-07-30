@@ -66,6 +66,15 @@ struct TargetStructureTests {
         #expect(panel.contains("panel.makeKeyAndOrderFront(nil)"))
         #expect(panel.contains("panel.makeFirstResponder(commandField)"))
         #expect(panel.contains("cancelOperation"))
+        #expect(panel.contains("actions.isVoiceAvailable()"))
+        #expect(panel.contains("session.transcriptNeedsConfirmation"))
+        #expect(
+            panel.contains(
+                "let wasUsingVoice = session.isVoiceOperationActive"
+            )
+        )
+        #expect(panel.contains("actions.cancelVoice()"))
+        #expect(appDelegate.contains("hasCompletedTextOnboarding"))
         #expect(!panel.contains("UserDefaults"))
         #expect(!panel.contains("Logger"))
         #expect(!session.contains("UserDefaults"))
