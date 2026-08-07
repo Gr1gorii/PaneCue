@@ -94,6 +94,7 @@ struct PaneCueDashboardActions {
     let cancelCommandLabListening: @MainActor () -> Void
     let makeDiagnosticsReport: @MainActor () -> String
     let resetPersonalization: @MainActor () -> Int
+    let clearApplyHistory: @MainActor () throws -> Int
 }
 
 @MainActor
@@ -427,6 +428,11 @@ final class PaneCueDashboardModel: ObservableObject {
     @discardableResult
     func resetPersonalization() -> Int {
         actions.resetPersonalization()
+    }
+
+    @discardableResult
+    func clearApplyHistory() throws -> Int {
+        try actions.clearApplyHistory()
     }
 
     func recordSuccessfulTextArrangement(
@@ -1265,6 +1271,7 @@ private struct PaneCueSettingsView: View {
     @ObservedObject var offlinePack: OfflinePackManager
     @State private var diagnosticsReport: String?
     @State private var isResetConfirmationPresented = false
+    @State private var isClearHistoryConfirmationPresented = false
     @State private var privacyActionMessage = ""
 
     var body: some View {
@@ -1515,6 +1522,20 @@ private struct PaneCueSettingsView: View {
                     Divider()
 
                     SettingRow(
+                        title: "Clear Apply History",
+                        detail: "Remove the local recovery records for the last five Apply operations",
+                        systemImage: "clock.arrow.circlepath",
+                        statusColor: .orange
+                    ) {
+                        Button("Clear…", role: .destructive) {
+                            isClearHistoryConfirmationPresented = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Divider()
+
+                    SettingRow(
                         title: "Reset Personalization",
                         detail: "Remove command corrections and local learning; Cues stay saved",
                         systemImage: "arrow.counterclockwise.circle",
@@ -1630,6 +1651,27 @@ private struct PaneCueSettingsView: View {
         } message: {
             Text(
                 "This removes saved command corrections and local learning. Your Cues, permissions, and API key are not changed."
+            )
+        }
+        .alert(
+            "Clear Apply History?",
+            isPresented: $isClearHistoryConfirmationPresented
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                do {
+                    let removedCount = try model.clearApplyHistory()
+                    privacyActionMessage = removedCount == 0
+                        ? "Apply history was already empty."
+                        : "Removed \(removedCount) Apply record\(removedCount == 1 ? "" : "s")."
+                } catch {
+                    privacyActionMessage =
+                        "PaneCue could not clear Apply history."
+                }
+            }
+        } message: {
+            Text(
+                "This removes only local window recovery records. Your Cues, permissions, personalization, and API key are not changed."
             )
         }
     }

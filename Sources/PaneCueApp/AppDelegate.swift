@@ -7,6 +7,7 @@ import PaneCueCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let featureProvider: any PaneCueFeatureProvider
     private let windowManager = WindowManager()
+    private let applyJournal = ApplyJournalStore()
     private let customScenarioStore = CustomScenarioStore()
     private let applicationLauncher = ScenarioApplicationLauncher()
     private let aiSettings = AIEngineSettingsStore()
@@ -300,6 +301,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 updateMenuState(
                     message: "Personalization reset · \(removedCount) corrections removed"
+                )
+                return removedCount
+            },
+            clearApplyHistory: { [weak self] in
+                guard let self else {
+                    return 0
+                }
+                let removedCount = try applyJournal.clear()
+                updateMenuState(
+                    message: "Apply history cleared"
                 )
                 return removedCount
             }
