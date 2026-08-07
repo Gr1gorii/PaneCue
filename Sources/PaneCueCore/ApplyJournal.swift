@@ -169,16 +169,17 @@ public final class ApplyJournalStore {
         return id
     }
 
+    @discardableResult
     public func complete(
         id: UUID,
         resultState: ApplyJournalResultState,
         windowResults: [String: ApplyJournalWindowResultState]
-    ) throws {
+    ) throws -> Bool {
         var snapshot = try loadSnapshot()
         guard let transactionIndex = snapshot.transactions.firstIndex(
             where: { $0.id == id }
         ) else {
-            return
+            return false
         }
 
         snapshot.transactions[transactionIndex].resultState = resultState
@@ -193,6 +194,7 @@ public final class ApplyJournalStore {
             }
         }
         try write(snapshot)
+        return true
     }
 
     @discardableResult

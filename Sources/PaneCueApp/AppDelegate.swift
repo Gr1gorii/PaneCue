@@ -6,8 +6,10 @@ import PaneCueCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let featureProvider: any PaneCueFeatureProvider
-    private let windowManager = WindowManager()
     private let applyJournal = ApplyJournalStore()
+    private lazy var windowManager = WindowManager(
+        applyJournal: applyJournal
+    )
     private let customScenarioStore = CustomScenarioStore()
     private let applicationLauncher = ScenarioApplicationLauncher()
     private let aiSettings = AIEngineSettingsStore()
