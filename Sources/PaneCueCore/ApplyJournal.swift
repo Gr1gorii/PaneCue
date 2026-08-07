@@ -148,6 +148,15 @@ public final class ApplyJournalStore {
         try loadSnapshot().transactions
     }
 
+    public func pendingTransaction() throws -> ApplyJournalTransaction? {
+        guard let latest = try transactions().last,
+              !latest.isCompleted,
+              latest.resultState == .pending else {
+            return nil
+        }
+        return latest
+    }
+
     @discardableResult
     public func begin(
         windows: [ApplyJournalWindowRecord],

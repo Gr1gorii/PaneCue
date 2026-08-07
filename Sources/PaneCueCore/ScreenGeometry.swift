@@ -124,6 +124,19 @@ public enum ScreenGeometry {
         )
     }
 
+    @MainActor
+    public static var availableDisplaySignatures: Set<String> {
+        Set(
+            NSScreen.screens.enumerated().map { index, screen in
+                displaySignature(
+                    index: index,
+                    frame: screen.frame,
+                    scale: screen.backingScaleFactor
+                )
+            }
+        )
+    }
+
     static func displaySignature(
         index: Int,
         frame: CGRect,

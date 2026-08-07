@@ -17,9 +17,11 @@ public final class WindowManager {
 
     private var activeSnapshot: [WindowSnapshot]?
     private var activeScenarioName: String?
+    private let applyJournal: ApplyJournalStore
     private let transactionLifecycle: ApplyTransactionLifecycle
 
     public init(applyJournal: ApplyJournalStore = ApplyJournalStore()) {
+        self.applyJournal = applyJournal
         transactionLifecycle = ApplyTransactionLifecycle(
             journal: applyJournal
         )
@@ -660,6 +662,102 @@ public final class WindowManager {
         return execution.value
     }
 
+    public func recoverInterruptedApply(
+        _ transaction: ApplyJournalTransaction
+    ) throws -> ApplyRecoveryResult {
+        guard hasAccessibilityPermission else {
+            throw PaneCueWindowError.accessibilityPermissionRequired
+        }
+        guard !transaction.isCompleted,
+              transaction.resultState == .pending else {
+            throw PaneCueWindowError.operationFailed(
+                details: "This interrupted layout is no longer available."
+            )
+        }
+
+        let windows = try eligibleWindows()
+        let candidates = windows.map { window in
+            ApplyRecoveryCandidate(
+                windowIdentifier: ephemeralIdentifier(for: window),
+                applicationBundleIdentifier: window.bundleIdentifier,
+                processIdentifier: Int32(window.processIdentifier)
+            )
+        }
+        let plan = ApplyRecoveryPlanner.plan(
+            transaction: transaction,
+            candidates: candidates,
+            availableDisplaySignatures:
+                ScreenGeometry.availableDisplaySignatures
+        )
+        let windowsByIdentifier = windows.reduce(
+            into: [String: ManagedWindow]()
+        ) { result, window in
+            let identifier = ephemeralIdentifier(for: window)
+            if result[identifier] == nil {
+                result[identifier] = window
+            }
+        }
+        var outcomes: [ApplyRecoveryWindowOutcome] = []
+
+        for (record, resolution) in zip(
+            transaction.windows,
+            plan.windows
+        ) {
+            let state: ApplyRecoveryOutcomeState
+            switch resolution.state {
+            case let .matched(candidateWindowIdentifier):
+                guard let window = windowsByIdentifier[
+                    candidateWindowIdentifier
+                ] else {
+                    state = .skippedMissing
+                    break
+                }
+                state = restoreJournalWindow(record, to: window)
+            case .missing:
+                state = .skippedMissing
+            case .ambiguous:
+                state = .skippedAmbiguous
+            case .displayUnavailable:
+                state = .skippedDisplayUnavailable
+            }
+            outcomes.append(
+                ApplyRecoveryWindowOutcome(
+                    journalWindowIdentifier: record.windowIdentifier,
+                    state: state
+                )
+            )
+        }
+
+        let provisionalResult = ApplyRecoveryResult(
+            transactionID: transaction.id,
+            outcomes: outcomes,
+            didPersistCompletion: true
+        )
+        let windowResults = outcomes.reduce(
+            into: [String: ApplyJournalWindowResultState]()
+        ) { results, outcome in
+            results[outcome.journalWindowIdentifier] =
+                recoveryJournalState(for: outcome.state)
+        }
+        let didPersistCompletion: Bool
+        do {
+            didPersistCompletion = try applyJournal.complete(
+                id: transaction.id,
+                resultState: provisionalResult.resultState,
+                windowResults: windowResults
+            )
+        } catch {
+            didPersistCompletion = false
+        }
+
+        logger.info("Completed an interrupted Apply recovery")
+        return ApplyRecoveryResult(
+            transactionID: transaction.id,
+            outcomes: outcomes,
+            didPersistCompletion: didPersistCompletion
+        )
+    }
+
     public func restorePreviousLayout() throws -> String {
         guard let snapshot = activeSnapshot else {
             throw PaneCueWindowError.noSnapshot
@@ -836,6 +934,97 @@ public final class WindowManager {
         case .unchanged:
             return .unchanged
         case .skipped:
+            return .skipped
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func restoreJournalWindow(
+        _ record: ApplyJournalWindowRecord,
+        to window: ManagedWindow
+    ) -> ApplyRecoveryOutcomeState {
+        let targetFrame = CGRect(
+            x: record.originalFrame.x,
+            y: record.originalFrame.y,
+            width: record.originalFrame.width,
+            height: record.originalFrame.height
+        )
+        guard targetFrame.origin.x.isFinite,
+              targetFrame.origin.y.isFinite,
+              targetFrame.size.width.isFinite,
+              targetFrame.size.height.isFinite,
+              targetFrame.width > 0,
+              targetFrame.height > 0,
+              AXHelpers.frame(of: window.element) != nil,
+              AXHelpers.canSetFrame(on: window.element) else {
+            return .failed
+        }
+
+        let isFullScreen = AXHelpers.copyBool(
+            from: window.element,
+            attribute: AXHelpers.fullScreenAttribute
+        ) ?? false
+        guard !isFullScreen else {
+            return .failed
+        }
+
+        let targetMinimized = record.wasMinimized ?? false
+        let currentMinimized = AXHelpers.copyBool(
+            from: window.element,
+            attribute: kAXMinimizedAttribute as CFString
+        ) ?? false
+        if let currentFrame = AXHelpers.frame(of: window.element),
+           framesApproximatelyEqual(
+               currentFrame,
+               targetFrame,
+               tolerance: 8
+           ),
+           currentMinimized == targetMinimized {
+            return .unchanged
+        }
+
+        do {
+            AXHelpers.setMinimized(false, on: window.element)
+            try AXHelpers.setFrame(targetFrame, on: window.element)
+            var restoredFrame = AXHelpers.frame(of: window.element)
+            if restoredFrame.map({
+                !framesApproximatelyEqual(
+                    $0,
+                    targetFrame,
+                    tolerance: 8
+                )
+            }) ?? true {
+                Thread.sleep(forTimeInterval: 0.12)
+                try AXHelpers.setFrame(targetFrame, on: window.element)
+                restoredFrame = AXHelpers.frame(of: window.element)
+            }
+            guard let restoredFrame,
+                  framesApproximatelyEqual(
+                      restoredFrame,
+                      targetFrame,
+                      tolerance: 8
+                  ) else {
+                return .failed
+            }
+            AXHelpers.setMinimized(targetMinimized, on: window.element)
+            return .restored
+        } catch {
+            logger.error("Could not restore a window from the Apply journal")
+            return .failed
+        }
+    }
+
+    private func recoveryJournalState(
+        for state: ApplyRecoveryOutcomeState
+    ) -> ApplyJournalWindowResultState {
+        switch state {
+        case .restored:
+            return .moved
+        case .unchanged:
+            return .unchanged
+        case .skippedMissing, .skippedAmbiguous,
+             .skippedDisplayUnavailable:
             return .skipped
         case .failed:
             return .failed
