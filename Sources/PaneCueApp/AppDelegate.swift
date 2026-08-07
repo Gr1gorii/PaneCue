@@ -343,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var globalHotKey: GlobalHotKeyController?
     private var quickCueShortcutStatus: QuickCueShortcutStatus = .unavailable
     private var customScenarioHotKeys: CustomScenarioHotKeyController?
+    private var hasPresentedRecoveryOffer = false
 
     init(featureProvider: any PaneCueFeatureProvider) {
         self.featureProvider = featureProvider
@@ -425,6 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         featureProvider.start()
         mainWindow.show()
         paneCueLinks.applicationDidBecomeReady()
+        DispatchQueue.main.async { [weak self] in
+            self?.presentRecoveryOfferIfNeeded()
+        }
     }
 
     func application(
@@ -752,6 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? featureProvider.isAutoModeEnabled
             : false
         restoreItem.isEnabled = windowManager.canRestore
+            || ((try? applyJournal.pendingTransaction()) != nil)
             || (
                 featureProvider.isExperimental
                     && featureProvider.isVideoCaptureActive
@@ -1367,11 +1372,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 : layoutSummary
         }
 
+        if let pendingTransaction = try applyJournal.pendingTransaction() {
+            let recovery = try windowManager.recoverInterruptedApply(
+                pendingTransaction
+            )
+            let summary = "\(recovery.title) · \(recovery.summary)"
+            return hadFloatingVideo
+                ? "\(summary) · Floating video closed"
+                : summary
+        }
+
         if hadFloatingVideo {
             return "Floating video closed"
         }
 
         throw PaneCueWindowError.noSnapshot
+    }
+
+    private func presentRecoveryOfferIfNeeded() {
+        guard !hasPresentedRecoveryOffer else {
+            return
+        }
+
+        let pendingTransaction: ApplyJournalTransaction
+        do {
+            guard let transaction = try applyJournal.pendingTransaction()
+            else {
+                return
+            }
+            pendingTransaction = transaction
+        } catch {
+            updateMenuState(message: "Recovery history is unavailable")
+            return
+        }
+
+        hasPresentedRecoveryOffer = true
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Restore previous layout?"
+        alert.informativeText =
+            "PaneCue found an interrupted arrangement. "
+            + "Only windows that can be matched safely will be restored. "
+            + "Nothing moves until you choose Restore Previous Layout."
+        alert.addButton(withTitle: "Restore Previous Layout")
+        alert.addButton(withTitle: "Not Now")
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            updateMenuState(
+                message: "Interrupted layout is available for recovery"
+            )
+            return
+        }
+
+        do {
+            try ensureAccessibilityForApply()
+            let result = try windowManager.recoverInterruptedApply(
+                pendingTransaction
+            )
+            updateMenuState(message: result.summary)
+            featureProvider.autoModeWorkspaceMayHaveChanged()
+            presentRecoveryResult(result)
+        } catch {
+            presentError(error)
+        }
+    }
+
+    private func presentRecoveryResult(_ result: ApplyRecoveryResult) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = result.resultState == .failed
+            ? .warning
+            : .informational
+        alert.messageText = result.title
+        alert.informativeText = result.summary
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     @objc
