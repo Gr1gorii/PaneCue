@@ -8,6 +8,7 @@ enum QuickCuePanelPhase: Equatable, Sendable {
     case transcribing
     case preparing
     case preview
+    case selectingCandidate
     case applying
     case result
     case rollingBack
@@ -18,6 +19,11 @@ enum QuickCuePanelEffect: Equatable, Sendable {
     case startVoice
     case stopAndTranscribe
     case preparePreview(String)
+    case selectCandidate(
+        previewID: UUID,
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    )
     case apply(ArrangementPreview)
     case rollback
 }
@@ -180,6 +186,49 @@ struct QuickCuePanelSession: Equatable, Sendable {
         errorMessage = message
     }
 
+    mutating func requestCandidateSelection(
+        slotID: UUID,
+        candidateID: EphemeralWindowIdentifier
+    ) -> QuickCuePanelEffect? {
+        guard isPresented,
+              phase == .preview,
+              let preview,
+              let slot = preview.resolution?[slotID],
+              case .ambiguous = slot.state,
+              slot.candidates.contains(where: {
+                  $0.id == candidateID && $0.isSelectable
+              }) else {
+            return nil
+        }
+        phase = .selectingCandidate
+        errorMessage = nil
+        return .selectCandidate(
+            previewID: preview.id,
+            slotID: slotID,
+            candidateID: candidateID
+        )
+    }
+
+    @discardableResult
+    mutating func finishCandidateSelection(
+        _ value: ArrangementPreview
+    ) -> Bool {
+        guard isPresented, phase == .selectingCandidate else {
+            return false
+        }
+        preview = value
+        phase = .preview
+        return true
+    }
+
+    mutating func failCandidateSelection(_ message: String) {
+        guard isPresented, phase == .selectingCandidate else {
+            return
+        }
+        phase = .preview
+        errorMessage = message
+    }
+
     mutating func requestApply() -> QuickCuePanelEffect? {
         guard isPresented,
               phase == .preview,
@@ -259,13 +308,28 @@ struct QuickCuePanelSession: Equatable, Sendable {
 struct QuickCuePreviewSlotPresentation: Equatable, Sendable {
     let title: String
     let display: String
+    let geometry: String
     let state: String
     let detail: String?
+}
+
+struct QuickCueCandidatePresentation: Equatable, Sendable {
+    let id: EphemeralWindowIdentifier
+    let title: String
+    let detail: String
+    let isSelectable: Bool
+}
+
+struct QuickCueCandidateGroupPresentation: Equatable, Sendable {
+    let slotID: UUID
+    let title: String
+    let candidates: [QuickCueCandidatePresentation]
 }
 
 struct QuickCuePreviewPresentation: Equatable, Sendable {
     let title: String
     let slots: [QuickCuePreviewSlotPresentation]
+    let candidateGroups: [QuickCueCandidateGroupPresentation]
     let canApply: Bool
 
     init(preview: ArrangementPreview) {
@@ -276,10 +340,48 @@ struct QuickCuePreviewPresentation: Equatable, Sendable {
             return QuickCuePreviewSlotPresentation(
                 title: window.target.displayName,
                 display: window.display.displayName,
+                geometry: Self.geometryDescription(window.gridRect),
                 state: Self.stateDescription(resolution?.state),
                 detail: Self.matchDescription(resolution?.state)
             )
         }
+        candidateGroups = preview.plan.windows.compactMap { window in
+            guard let resolution = preview.resolution?[window.id],
+                  case .ambiguous = resolution.state,
+                  !resolution.candidates.isEmpty else {
+                return nil
+            }
+            return QuickCueCandidateGroupPresentation(
+                slotID: window.id,
+                title: window.target.displayName,
+                candidates: resolution.candidates.map { candidate in
+                    QuickCueCandidatePresentation(
+                        id: candidate.id,
+                        title: candidate.localizedApplicationName,
+                        detail: candidate.localDifferentiator
+                            ?? "Window",
+                        isSelectable: candidate.isSelectable
+                    )
+                }
+            )
+        }
+    }
+
+    var candidateCount: Int {
+        candidateGroups.reduce(0) { $0 + $1.candidates.count }
+    }
+
+    private static func geometryDescription(
+        _ rect: ScenarioGridRect
+    ) -> String {
+        let normalized = rect.normalized
+        return "\(percent(normalized.width)) × "
+            + "\(percent(normalized.height)) · "
+            + "x \(percent(normalized.x)), y \(percent(normalized.y))"
+    }
+
+    private static func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
     }
 
     private static func stateDescription(

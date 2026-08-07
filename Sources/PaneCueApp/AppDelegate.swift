@@ -72,6 +72,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 return try await prepareQuickCuePreview(command)
             },
+            selectCandidate: {
+                [weak self] previewID, slotID, candidateID in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await arrangeCoordinator.selectCandidate(
+                    previewID: previewID,
+                    slotID: slotID,
+                    candidateID: candidateID
+                )
+            },
             applyPreview: { [weak self] preview in
                 guard let self else {
                     throw CommandLabError.unavailable
