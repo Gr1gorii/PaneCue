@@ -139,4 +139,84 @@ struct PaneCueLinkTests {
             ) == .accepted(.preview(command: "accepted"))
         )
     }
+
+    @Test
+    func deterministicFuzzNeverCrashesOrCreatesApplyAuthority() {
+        var generator = PaneCueLinkFuzzGenerator(
+            state: 0x5041_4E45_4355_4532
+        )
+
+        for index in 0..<4_096 {
+            let candidate = generator.candidate(iteration: index)
+
+            switch PaneCueLinkParser.parse(candidate) {
+            case .accepted(.show),
+                 .accepted(.preview),
+                 .accepted(.cue):
+                // The exhaustive switch is the security assertion: accepted
+                // input can only produce one of the three Preview-only
+                // authorities in PaneCueLinkRequest. Apply is not a case.
+                break
+            case .rejected:
+                break
+            }
+        }
+    }
+}
+
+private struct PaneCueLinkFuzzGenerator {
+    private static let alphabet = Array(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:/?&=%#@.-_+ \n\t"
+            .utf8
+    )
+
+    var state: UInt64
+
+    mutating func candidate(iteration: Int) -> String {
+        if iteration.isMultiple(of: 31) {
+            return String(
+                repeating: "x",
+                count: PaneCueLinkParser.maximumURLByteCount
+                    + Int(next() % 32)
+                    + 1
+            )
+        }
+
+        var bytes: [UInt8]
+        if iteration.isMultiple(of: 2) {
+            let routes = ["show", "preview?text=fixture", "cue?id=fixture"]
+            let route = routes[iteration % routes.count]
+            bytes = Array(
+                "\(PaneCueLinkParser.scheme)://\(route)".utf8
+            )
+        } else {
+            bytes = []
+        }
+
+        let editCount = 1 + Int(next() % 24)
+        for _ in 0..<editCount {
+            switch next() % 3 {
+            case 0 where !bytes.isEmpty:
+                bytes.remove(at: Int(next() % UInt64(bytes.count)))
+            case 1 where !bytes.isEmpty:
+                bytes[Int(next() % UInt64(bytes.count))] = randomByte()
+            default:
+                let index = bytes.isEmpty
+                    ? 0
+                    : Int(next() % UInt64(bytes.count + 1))
+                bytes.insert(randomByte(), at: index)
+            }
+        }
+
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private mutating func randomByte() -> UInt8 {
+        Self.alphabet[Int(next() % UInt64(Self.alphabet.count))]
+    }
+
+    private mutating func next() -> UInt64 {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return state
+    }
 }

@@ -12,6 +12,10 @@ video, and optional voice commands.
 PaneCue source code is available under the
 [Mozilla Public License 2.0](LICENSE).
 
+## Integrations
+
+- [Apple Shortcuts and Raycast](docs/integrations/apple-shortcuts.md)
+
 ## v0.1 Product Freeze
 
 The public-beta product contract is defined by:
