@@ -465,3 +465,109 @@ enum QuickCuePanelPlacement {
         )
     }
 }
+
+enum QuickCueMotionPolicy {
+    static func shouldAnimate(
+        panelIsVisible: Bool,
+        reduceMotion: Bool
+    ) -> Bool {
+        panelIsVisible && !reduceMotion
+    }
+}
+
+struct QuickCuePerformanceSnapshot: Equatable, Sendable {
+    let hotKeyToVisibleP95: TimeInterval?
+    let textToPreviewP95: TimeInterval?
+    let transcriptToPreviewP95: TimeInterval?
+
+    var meetsLatencyGates: Bool {
+        Self.meets(hotKeyToVisibleP95, limit: 0.2)
+            && Self.meets(textToPreviewP95, limit: 0.5)
+            && Self.meets(transcriptToPreviewP95, limit: 0.5)
+    }
+
+    private static func meets(
+        _ value: TimeInterval?,
+        limit: TimeInterval
+    ) -> Bool {
+        value.map { $0 < limit } ?? false
+    }
+}
+
+struct QuickCuePerformanceTracker: Sendable {
+    private static let maximumSampleCount = 100
+    private var hotKeyToVisibleSamples: [TimeInterval] = []
+    private var textToPreviewSamples: [TimeInterval] = []
+    private var transcriptToPreviewSamples: [TimeInterval] = []
+
+    var snapshot: QuickCuePerformanceSnapshot {
+        QuickCuePerformanceSnapshot(
+            hotKeyToVisibleP95: Self.percentile95(
+                hotKeyToVisibleSamples
+            ),
+            textToPreviewP95: Self.percentile95(
+                textToPreviewSamples
+            ),
+            transcriptToPreviewP95: Self.percentile95(
+                transcriptToPreviewSamples
+            )
+        )
+    }
+
+    mutating func recordHotKeyToVisible(_ duration: TimeInterval) {
+        Self.append(duration, to: &hotKeyToVisibleSamples)
+    }
+
+    mutating func recordPreview(
+        _ duration: TimeInterval,
+        fromTranscript: Bool
+    ) {
+        if fromTranscript {
+            Self.append(duration, to: &transcriptToPreviewSamples)
+        } else {
+            Self.append(duration, to: &textToPreviewSamples)
+        }
+    }
+
+    static func percentile95(
+        _ samples: [TimeInterval]
+    ) -> TimeInterval? {
+        let valid = samples
+            .filter { $0.isFinite && $0 >= 0 }
+            .sorted()
+        guard !valid.isEmpty else {
+            return nil
+        }
+        let rank = Int(ceil(Double(valid.count) * 0.95)) - 1
+        return valid[min(max(rank, 0), valid.count - 1)]
+    }
+
+    private static func append(
+        _ duration: TimeInterval,
+        to samples: inout [TimeInterval]
+    ) {
+        guard duration.isFinite, duration >= 0 else {
+            return
+        }
+        samples.append(duration)
+        if samples.count > maximumSampleCount {
+            samples.removeFirst(samples.count - maximumSampleCount)
+        }
+    }
+}
+
+struct QuickCuePanelLifecycleProbeResult: Equatable, Sendable {
+    let completedCycles: Int
+    let orphanWindowCount: Int
+    let panelIsVisible: Bool
+    let sessionIsPresented: Bool
+    let hasActiveOperation: Bool
+
+    var passed: Bool {
+        completedCycles > 0
+            && orphanWindowCount == 0
+            && !panelIsVisible
+            && !sessionIsPresented
+            && !hasActiveOperation
+    }
+}

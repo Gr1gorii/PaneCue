@@ -299,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var restoreItem: NSMenuItem!
     private var customScenariosMenu: NSMenu!
     private var globalHotKey: GlobalHotKeyController?
+    private var quickCueShortcutStatus: QuickCueShortcutStatus = .unavailable
     private var customScenarioHotKeys: CustomScenarioHotKeyController?
 
     init(featureProvider: any PaneCueFeatureProvider) {
@@ -712,7 +713,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 activeScenarioName: windowManager.currentScenarioName,
                 voiceState: featureProvider.voiceState,
                 canRestore: restoreItem.isEnabled,
-                isAutoModeEnabled: suggestionsEnabled
+                isAutoModeEnabled: suggestionsEnabled,
+                quickCueShortcutStatus: quickCueShortcutStatus
             )
         )
     }
@@ -724,7 +726,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self?.quickCue.present()
                 }
             }
+            quickCueShortcutStatus = .active
+            updateMenuState()
+        } catch let error as GlobalHotKeyError {
+            quickCueShortcutStatus = error.shortcutStatus
+            updateMenuState(message: error.localizedDescription)
         } catch {
+            quickCueShortcutStatus = .unavailable
             updateMenuState(message: error.localizedDescription)
         }
     }

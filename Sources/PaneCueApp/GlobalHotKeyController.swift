@@ -6,12 +6,53 @@ enum GlobalHotKeyError: LocalizedError {
     case installationFailed(OSStatus)
     case registrationFailed(OSStatus)
 
+    var shortcutStatus: QuickCueShortcutStatus {
+        switch self {
+        case let .registrationFailed(status)
+            where status == OSStatus(eventHotKeyExistsErr):
+            return .conflict
+        case .installationFailed, .registrationFailed:
+            return .unavailable
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case let .installationFailed(status):
             return "PaneCue could not install the Quick Cue shortcut handler (\(status))."
+        case let .registrationFailed(status)
+            where status == OSStatus(eventHotKeyExistsErr):
+            return "⌥ Space is already used by another application."
         case let .registrationFailed(status):
             return "PaneCue could not register ⌥ Space (\(status))."
+        }
+    }
+}
+
+enum QuickCueShortcutStatus: Equatable, Sendable {
+    case active
+    case conflict
+    case unavailable
+
+    var title: String {
+        switch self {
+        case .active:
+            return "Available"
+        case .conflict:
+            return "Conflict"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .active:
+            return "Press ⌥ Space from any application"
+        case .conflict:
+            return "Another application already uses ⌥ Space"
+        case .unavailable:
+            return "The global shortcut could not be registered"
         }
     }
 }
