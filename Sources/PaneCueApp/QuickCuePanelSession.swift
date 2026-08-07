@@ -37,6 +37,7 @@ struct QuickCuePanelSession: Equatable, Sendable {
     private(set) var statusMessage: String?
     private(set) var errorMessage: String?
     private(set) var transcriptNeedsConfirmation = false
+    private(set) var isExternalRequest = false
     private var draftBeforeVoice: String?
 
     var canEditCommand: Bool {
@@ -54,6 +55,23 @@ struct QuickCuePanelSession: Equatable, Sendable {
 
     mutating func present() {
         isPresented = true
+    }
+
+    mutating func beginExternalCommand(
+        _ value: String
+    ) -> QuickCuePanelEffect? {
+        self = QuickCuePanelSession()
+        isPresented = true
+        isExternalRequest = true
+        draft = value
+        return submitCommand()
+    }
+
+    mutating func beginExternalCuePreview() {
+        self = QuickCuePanelSession()
+        isPresented = true
+        isExternalRequest = true
+        phase = .preparing
     }
 
     mutating func updateDraft(_ value: String) {
@@ -294,6 +312,7 @@ struct QuickCuePanelSession: Equatable, Sendable {
         statusMessage = nil
         errorMessage = nil
         transcriptNeedsConfirmation = false
+        isExternalRequest = false
         draftBeforeVoice = nil
     }
 
@@ -333,7 +352,9 @@ struct QuickCuePreviewPresentation: Equatable, Sendable {
     let canApply: Bool
 
     init(preview: ArrangementPreview) {
-        title = "Preview · \(preview.plan.windows.count) windows"
+        title = preview.source == .paneCueLink
+            ? "External Preview · \(preview.plan.windows.count) windows"
+            : "Preview · \(preview.plan.windows.count) windows"
         canApply = preview.eligibility == .ready
         slots = preview.plan.windows.map { window in
             let resolution = preview.resolution?[window.id]

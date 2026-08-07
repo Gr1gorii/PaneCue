@@ -161,6 +161,12 @@ final class ArrangeCoordinatorController {
         return try await prepare(plan, source: source)
     }
 
+    func preparePaneCueLinkPlan(
+        _ plan: WorkspacePlan
+    ) async throws -> ArrangementPreview {
+        try await prepare(plan, source: .paneCueLink)
+    }
+
     func selectCandidate(
         previewID: UUID,
         slotID: UUID,

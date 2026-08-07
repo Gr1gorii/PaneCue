@@ -15,6 +15,13 @@ struct ReleaseIdentityTests {
                 == PaneCueIdentity.bundleIdentifier
         )
         #expect(plist["LSMinimumSystemVersion"] as? String == "26.0")
+        let urlTypes = try #require(
+            plist["CFBundleURLTypes"] as? [[String: Any]]
+        )
+        let schemes = try #require(
+            urlTypes.first?["CFBundleURLSchemes"] as? [String]
+        )
+        #expect(schemes == [PaneCueLinkParser.scheme])
     }
 
     @Test
@@ -28,6 +35,7 @@ struct ReleaseIdentityTests {
                 == "io.github.gr1gorii.PaneCue.experimental"
         )
         #expect(plist["LSMinimumSystemVersion"] as? String == "26.0")
+        #expect(plist["CFBundleURLTypes"] == nil)
     }
 
     @Test

@@ -8,6 +8,10 @@ struct QuickCuePanelActions {
     let cancelVoice: @MainActor () -> Void
     let preparePreview: @MainActor
         (String) async throws -> ArrangementPreview
+    let prepareExternalCommandPreview: @MainActor
+        (String) async throws -> ArrangementPreview
+    let prepareExternalCuePreview: @MainActor
+        (UUID) async throws -> ArrangementPreview
     let selectCandidate: @MainActor
         (
             UUID,
@@ -60,22 +64,55 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
     func present() {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        if !panel.isVisible {
-            let frontmost = NSWorkspace.shared.frontmostApplication
-            if frontmost?.processIdentifier != ProcessInfo.processInfo
-                .processIdentifier {
-                returnApplication = frontmost
-            }
-        }
+        rememberFrontmostApplicationIfNeeded()
         session.present()
-        updateAnimationBehavior()
-        render()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        focusInitialElement()
+        showPanel()
         performanceTracker.recordHotKeyToVisible(
             ProcessInfo.processInfo.systemUptime - startedAt
         )
+    }
+
+    func presentExternalCommand(_ command: String) {
+        prepareToReplaceSession()
+        rememberFrontmostApplicationIfNeeded()
+        guard case let .preparePreview(value) = session
+            .beginExternalCommand(command) else {
+            return
+        }
+        showPanel()
+        startCommandPreview(
+            value,
+            startedAt: ProcessInfo.processInfo.systemUptime,
+            startedFromTranscript: false,
+            isExternal: true,
+            tracksPerformance: false
+        )
+    }
+
+    func presentExternalCue(id: UUID) {
+        prepareToReplaceSession()
+        rememberFrontmostApplicationIfNeeded()
+        session.beginExternalCuePreview()
+        showPanel()
+        operationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let preview = try await actions.prepareExternalCuePreview(id)
+                try Task.checkCancellation()
+                guard session.finishPreview(preview) else {
+                    return
+                }
+                render()
+            } catch is CancellationError {
+                return
+            } catch {
+                session.failPreview(error.localizedDescription)
+                render()
+                panel.makeFirstResponder(commandField)
+            }
+        }
     }
 
     func dismiss() {
@@ -215,6 +252,14 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         commandField.isEditable = session.canEditCommand
         commandField.isSelectable = session.canEditCommand
         contentStack.addArrangedSubview(makeCommandRow())
+
+        if session.isExternalRequest {
+            contentStack.addArrangedSubview(makeMessageRow(
+                "External request · Review before Apply",
+                systemImage: "link",
+                color: .systemPurple
+            ))
+        }
 
         switch session.phase {
         case .composing:
@@ -897,22 +942,44 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             return
         }
         render()
+        startCommandPreview(
+            command,
+            startedAt: startedAt,
+            startedFromTranscript: startedFromTranscript,
+            isExternal: false,
+            tracksPerformance: true
+        )
+    }
+
+    private func startCommandPreview(
+        _ command: String,
+        startedAt: TimeInterval,
+        startedFromTranscript: Bool,
+        isExternal: Bool,
+        tracksPerformance: Bool
+    ) {
         operationTask?.cancel()
         operationTask = Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
             do {
-                let preview = try await actions.preparePreview(command)
+                let preview = try await (
+                    isExternal
+                        ? actions.prepareExternalCommandPreview(command)
+                        : actions.preparePreview(command)
+                )
                 try Task.checkCancellation()
                 guard session.finishPreview(preview) else {
                     return
                 }
                 render()
-                performanceTracker.recordPreview(
-                    ProcessInfo.processInfo.systemUptime - startedAt,
-                    fromTranscript: startedFromTranscript
-                )
+                if tracksPerformance {
+                    performanceTracker.recordPreview(
+                        ProcessInfo.processInfo.systemUptime - startedAt,
+                        fromTranscript: startedFromTranscript
+                    )
+                }
             } catch is CancellationError {
                 return
             } catch {
@@ -921,6 +988,34 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                 panel.makeFirstResponder(commandField)
             }
         }
+    }
+
+    private func rememberFrontmostApplicationIfNeeded() {
+        guard !panel.isVisible else {
+            return
+        }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        if frontmost?.processIdentifier != ProcessInfo.processInfo
+            .processIdentifier {
+            returnApplication = frontmost
+        }
+    }
+
+    private func prepareToReplaceSession() {
+        let wasUsingVoice = session.isVoiceOperationActive
+        operationTask?.cancel()
+        operationTask = nil
+        if wasUsingVoice {
+            actions.cancelVoice()
+        }
+    }
+
+    private func showPanel() {
+        updateAnimationBehavior()
+        render()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        focusInitialElement()
     }
 
     @objc

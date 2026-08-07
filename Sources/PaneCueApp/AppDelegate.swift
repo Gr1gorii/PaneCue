@@ -72,6 +72,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 return try await prepareQuickCuePreview(command)
             },
+            prepareExternalCommandPreview: { [weak self] command in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await preparePaneCueLinkPreview(command)
+            },
+            prepareExternalCuePreview: { [weak self] id in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                return try await preparePaneCueLinkCuePreview(id: id)
+            },
             selectCandidate: {
                 [weak self] previewID, slotID, candidateID in
                 guard let self else {
@@ -293,6 +305,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         )
     )
+    private lazy var paneCueLinks = PaneCueLinkController(
+        actions: PaneCueLinkActions(
+            show: { [weak self] in
+                self?.mainWindow.show()
+            },
+            previewCommand: { [weak self] command in
+                self?.quickCue.presentExternalCommand(command)
+            },
+            previewCue: { [weak self] id in
+                guard let self,
+                      customScenarioStore.scenario(id: id) != nil else {
+                    return
+                }
+                quickCue.presentExternalCue(id: id)
+            }
+        )
+    )
     private var statusItem: NSStatusItem!
     private var statusLineItem: NSMenuItem!
     private var accessibilityItem: NSMenuItem!
@@ -382,6 +411,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureCustomScenarioHotKeys()
         featureProvider.start()
         mainWindow.show()
+        paneCueLinks.applicationDidBecomeReady()
+    }
+
+    func application(
+        _ application: NSApplication,
+        open urls: [URL]
+    ) {
+        paneCueLinks.receive(urls)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -740,6 +777,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func prepareQuickCuePreview(
         _ command: String
     ) async throws -> ArrangementPreview {
+        try await prepareCommandPreview(
+            command,
+            source: .quickCue
+        )
+    }
+
+    private func preparePaneCueLinkPreview(
+        _ command: String
+    ) async throws -> ArrangementPreview {
+        try await prepareCommandPreview(
+            command,
+            source: .paneCueLink
+        )
+    }
+
+    private func prepareCommandPreview(
+        _ command: String,
+        source: ArrangementRequestSource
+    ) async throws -> ArrangementPreview {
         let analysis = try await commandLab.analyze(
             transcript: command,
             currentPlan: nil,
@@ -750,7 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         try Task.checkCancellation()
         let prepared = try await arrangeCoordinator.prepare(
             analysis,
-            source: .quickCue,
+            source: source,
             savedScenarios: customScenarioStore.scenarios
         )
         guard case let .plan(plan, _) = prepared else {
@@ -772,10 +828,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return preview
     }
 
+    private func preparePaneCueLinkCuePreview(
+        id: UUID
+    ) async throws -> ArrangementPreview {
+        guard let scenario = customScenarioStore.scenario(id: id) else {
+            throw PaneCueLinkPreviewError.cueUnavailable
+        }
+        return try await arrangeCoordinator.preparePaneCueLinkPlan(
+            WorkspacePlan(scenario: scenario)
+        )
+    }
+
     private func discardQuickCuePreview(id: UUID? = nil) async {
         let state = await arrangeCoordinator.currentState()
         guard let preview = state.preview,
-              preview.source == .quickCue,
+              preview.source == .quickCue
+                  || preview.source == .paneCueLink,
               id == nil || preview.id == id else {
             return
         }
@@ -1318,5 +1386,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.informativeText = error.localizedDescription
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+private enum PaneCueLinkPreviewError: LocalizedError {
+    case cueUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .cueUnavailable:
+            return "That Cue is no longer available."
+        }
     }
 }

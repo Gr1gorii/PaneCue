@@ -18,6 +18,19 @@
     <string>PaneCue</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLName</key>
+            <string>io.github.gr1gorii.PaneCue.links</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>panecue</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleShortVersionString</key>
     <string>0.2.0</string>
     <key>CFBundleVersion</key>
