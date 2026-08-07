@@ -50,6 +50,8 @@ echo "[4/7] Verifying the frozen stable profile"
     || fail "unexpected minimum system version"
 [[ "$(plist_value PaneCueReleaseProfile)" == "Main" ]] \
     || fail "stable bundle is not using the Main profile"
+[[ "$(plist_value CFBundleURLTypes:0:CFBundleURLSchemes:0)" == "panecue" ]] \
+    || fail "stable bundle does not register the frozen panecue URL scheme"
 [[ "$(lipo -archs "${APP_DIR}/Contents/MacOS/PaneCue")" == "arm64" ]] \
     || fail "stable executable is not arm64-only"
 assert_plist_absent NSScreenCaptureUsageDescription

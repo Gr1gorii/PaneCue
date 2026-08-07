@@ -165,6 +165,46 @@ struct QuickCuePanelTests {
     }
 
     @Test
+    func externalRequestsStartInPreviewOnlyModeAndResetOnDismiss() {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("old")
+
+        #expect(
+            session.beginExternalCommand("new")
+                == .preparePreview("new")
+        )
+        #expect(session.isPresented)
+        #expect(session.isExternalRequest)
+        #expect(session.phase == .preparing)
+
+        let preview = makeQuickCuePreview(source: .paneCueLink)
+        let didFinish = session.finishPreview(preview)
+        #expect(didFinish)
+        #expect(session.phase == .preview)
+        let apply = session.requestApply()
+        #expect(apply == .apply(preview))
+
+        session.dismiss()
+        #expect(!session.isExternalRequest)
+        #expect(session.preview == nil)
+
+        session.beginExternalCuePreview()
+        #expect(session.isExternalRequest)
+        #expect(session.phase == .preparing)
+    }
+
+    @Test
+    func paneCueLinkPreviewIsClearlyMarkedAsExternal() {
+        let presentation = QuickCuePreviewPresentation(
+            preview: makeQuickCuePreview(source: .paneCueLink)
+        )
+
+        #expect(presentation.title == "External Preview · 2 windows")
+        #expect(presentation.canApply)
+    }
+
+    @Test
     func voiceIsUnavailableUntilTextOnboardingCompletes() {
         var session = QuickCuePanelSession()
         session.present()
@@ -408,6 +448,12 @@ private func makeLifecycleProbeActions() -> QuickCuePanelActions {
         preparePreview: { _ in
             throw QuickCueTextFlowError.previewUnavailable
         },
+        prepareExternalCommandPreview: { _ in
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        prepareExternalCuePreview: { _ in
+            throw QuickCueTextFlowError.previewUnavailable
+        },
         selectCandidate: { _, _, _ in
             throw QuickCueTextFlowError.previewUnavailable
         },
@@ -422,7 +468,9 @@ private func makeLifecycleProbeActions() -> QuickCuePanelActions {
     )
 }
 
-private func makeQuickCuePreview() -> ArrangementPreview {
+private func makeQuickCuePreview(
+    source: ArrangementRequestSource = .quickCue
+) -> ArrangementPreview {
     let plan = WorkspacePlan.tiled(
         targets: [
             ScenarioWindowTarget(role: .browser),
@@ -449,7 +497,7 @@ private func makeQuickCuePreview() -> ArrangementPreview {
     }
     return ArrangementPreview(
         draft: ArrangementDraft(
-            source: .quickCue,
+            source: source,
             plan: plan
         ),
         eligibility: .ready,
