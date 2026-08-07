@@ -168,9 +168,99 @@ struct QuickCuePanelTests {
         #expect(presentation.slots.allSatisfy { $0.state == "Ready" })
         #expect(presentation.slots[0].display == "Main display")
         #expect(
+            presentation.slots[0].geometry
+                == "65% × 100% · x 0%, y 0%"
+        )
+        #expect(
+            presentation.slots[1].geometry
+                == "35% × 100% · x 65%, y 0%"
+        )
+        #expect(
             presentation.slots[0].detail
                 == "Browser · Matched role: Browser"
         )
+        #expect(presentation.candidateGroups.isEmpty)
+    }
+
+    @Test
+    func ambiguousPreviewOffersCandidatesAndBlocksApplyUntilSelection()
+        throws {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+        _ = session.submitCommand()
+
+        let ambiguous = makeAmbiguousQuickCuePreview()
+        let didFinishAmbiguousPreview = session.finishPreview(ambiguous)
+        #expect(didFinishAmbiguousPreview)
+        let blockedApply = session.requestApply()
+        #expect(blockedApply == nil)
+
+        let presentation = QuickCuePreviewPresentation(preview: ambiguous)
+        #expect(!presentation.canApply)
+        #expect(presentation.candidateGroups.count == 1)
+        #expect(presentation.candidateCount == 2)
+        #expect(presentation.candidateGroups[0].title == "Any browser")
+        #expect(
+            presentation.candidateGroups[0].candidates.map(\.detail)
+                == ["First local candidate", "Second local candidate"]
+        )
+
+        let slotID = ambiguous.plan.windows[0].id
+        let candidateID = EphemeralWindowIdentifier(
+            rawValue: "candidate-one"
+        )
+        let selectionEffect = session.requestCandidateSelection(
+            slotID: slotID,
+            candidateID: candidateID
+        )
+        #expect(
+            selectionEffect == .selectCandidate(
+                previewID: ambiguous.id,
+                slotID: slotID,
+                candidateID: candidateID
+            )
+        )
+        #expect(session.phase == .selectingCandidate)
+        let applyWhileSelecting = session.requestApply()
+        #expect(applyWhileSelecting == nil)
+
+        let selectedResolution = try #require(ambiguous.resolution)
+            .selecting(candidateID, for: slotID)
+        let selected = ArrangementPreview(
+            draft: ambiguous.draft,
+            eligibility: .ready,
+            resolution: selectedResolution
+        )
+        let didFinishSelection = session.finishCandidateSelection(selected)
+        #expect(didFinishSelection)
+        #expect(session.phase == .preview)
+        let selectedApply = session.requestApply()
+        #expect(selectedApply == .apply(selected))
+    }
+
+    @Test
+    func unavailableCandidateNeverStartsSelection() {
+        var session = QuickCuePanelSession()
+        session.present()
+        session.updateDraft("x")
+        _ = session.submitCommand()
+
+        let preview = makeAmbiguousQuickCuePreview(
+            firstCandidateUnsupported: true
+        )
+        let didFinishPreview = session.finishPreview(preview)
+        #expect(didFinishPreview)
+        let selectionEffect = session.requestCandidateSelection(
+            slotID: preview.plan.windows[0].id,
+            candidateID: EphemeralWindowIdentifier(
+                rawValue: "candidate-one"
+            )
+        )
+        #expect(
+            selectionEffect == nil
+        )
+        #expect(session.phase == .preview)
     }
 
     @Test
@@ -254,5 +344,70 @@ private func makeQuickCuePreview() -> ArrangementPreview {
         ),
         eligibility: .ready,
         resolution: ArrangementTargetResolutionSet(slots: slots)
+    )
+}
+
+private func makeAmbiguousQuickCuePreview(
+    firstCandidateUnsupported: Bool = false
+) -> ArrangementPreview {
+    let plan = WorkspacePlan.tiled(
+        targets: [
+            ScenarioWindowTarget(role: .browser),
+            ScenarioWindowTarget(role: .notes)
+        ]
+    )
+    let browserCandidates = [
+        ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-one"
+            ),
+            bundleIdentifier: "com.example.browser",
+            display: .main,
+            localizedApplicationName: "Browser",
+            localDifferentiator: "First local candidate",
+            unsupportedReason: firstCandidateUnsupported
+                ? .fullScreen
+                : nil
+        ),
+        ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-two"
+            ),
+            bundleIdentifier: "com.example.browser",
+            display: .main,
+            localizedApplicationName: "Browser",
+            localDifferentiator: "Second local candidate"
+        )
+    ]
+    let resolution = ArrangementTargetResolutionSet(
+        slots: [
+            ArrangementSlotResolution(
+                id: plan.windows[0].id,
+                state: .ambiguous(candidateCount: 2),
+                candidates: browserCandidates
+            ),
+            ArrangementSlotResolution(
+                id: plan.windows[1].id,
+                state: .resolved(
+                    ResolvedArrangementTarget(
+                        bundleIdentifier: "com.example.notes",
+                        windowIdentifier: EphemeralWindowIdentifier(
+                            rawValue: "notes-window"
+                        ),
+                        display: .main,
+                        matchReason: .matchedRole(.notes),
+                        localizedApplicationName: "Notes"
+                    )
+                )
+            )
+        ]
+    )
+    return ArrangementPreview(
+        draft: ArrangementDraft(
+            source: .quickCue,
+            plan: plan
+        ),
+        eligibility: .blocked,
+        resolution: resolution
     )
 }

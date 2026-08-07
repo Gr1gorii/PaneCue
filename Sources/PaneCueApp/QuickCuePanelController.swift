@@ -8,6 +8,12 @@ struct QuickCuePanelActions {
     let cancelVoice: @MainActor () -> Void
     let preparePreview: @MainActor
         (String) async throws -> ArrangementPreview
+    let selectCandidate: @MainActor
+        (
+            UUID,
+            UUID,
+            EphemeralWindowIdentifier
+        ) async throws -> ArrangementPreview
     let applyPreview: @MainActor
         (ArrangementPreview) async throws -> WorkspaceApplyResult
     let rollback: @MainActor () async throws -> String
@@ -97,7 +103,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.orientation = .vertical
-        contentStack.alignment = .leading
+        contentStack.alignment = .width
         contentStack.spacing = 12
         visualEffect.addSubview(contentStack)
 
@@ -200,11 +206,16 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             contentStack.addArrangedSubview(makeProgressRow(
                 "Creating a safe Preview…"
             ))
-        case .preview, .applying:
+        case .preview, .selectingCandidate, .applying:
             if let preview = session.preview {
-                contentStack.addArrangedSubview(makePreviewView(preview))
+                let previewView = makePreviewView(preview)
+                contentStack.addArrangedSubview(previewView)
             }
-            if session.phase == .applying {
+            if session.phase == .selectingCandidate {
+                contentStack.addArrangedSubview(makeProgressRow(
+                    "Binding the selected window…"
+                ))
+            } else if session.phase == .applying {
                 contentStack.addArrangedSubview(makeProgressRow(
                     "Applying after revalidation…"
                 ))
@@ -255,10 +266,19 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             return 166
         case .preparing:
             return 126
-        case .preview, .applying:
-            let count = CGFloat(session.preview?.plan.windows.count ?? 0)
-            let base: CGFloat = session.phase == .applying ? 166 : 202
-            return base + count * 44
+        case .preview, .selectingCandidate, .applying:
+            guard let preview = session.preview else {
+                return 202
+            }
+            let presentation = QuickCuePreviewPresentation(preview: preview)
+            let slotHeight = CGFloat(presentation.slots.count) * 52
+            let chooserHeight = min(
+                CGFloat(presentation.candidateGroups.count) * 38
+                    + CGFloat(presentation.candidateCount) * 52,
+                268
+            )
+            let progressHeight: CGFloat = session.phase == .preview ? 0 : 42
+            return 202 + slotHeight + chooserHeight + progressHeight
         case .result:
             return session.errorMessage == nil ? 190 : 228
         case .rollingBack:
@@ -339,7 +359,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         let presentation = QuickCuePreviewPresentation(preview: preview)
         let stack = NSStackView()
         stack.orientation = .vertical
-        stack.alignment = .leading
+        stack.alignment = .width
         stack.spacing = 8
 
         let heading = NSTextField(labelWithString: presentation.title)
@@ -350,6 +370,11 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             stack.addArrangedSubview(makePreviewRow(
                 index: index,
                 slot: slot
+            ))
+        }
+        if !presentation.candidateGroups.isEmpty {
+            stack.addArrangedSubview(makeCandidateChooser(
+                presentation.candidateGroups
             ))
         }
         stack.setAccessibilityLabel("Quick Cue Preview")
@@ -371,7 +396,11 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         let detail = NSTextField(
-            labelWithString: [slot.display, slot.detail]
+            labelWithString: [
+                slot.display,
+                slot.geometry,
+                slot.detail
+            ]
                 .compactMap { $0 }
                 .joined(separator: " · ")
         )
@@ -394,7 +423,102 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
+        row.setAccessibilityLabel(
+            "\(index + 1), \(slot.title), \(slot.display), "
+                + "\(slot.geometry), \(slot.state)"
+                + (slot.detail.map { ", \($0)" } ?? "")
+        )
         return row
+    }
+
+    private func makeCandidateChooser(
+        _ groups: [QuickCueCandidateGroupPresentation]
+    ) -> NSView {
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.alignment = .width
+        content.spacing = 7
+
+        let heading = NSTextField(
+            labelWithString: "Choose the exact window"
+        )
+        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.textColor = .systemOrange
+        content.addArrangedSubview(heading)
+
+        var shortcutNumber = 1
+        for group in groups {
+            let groupTitle = NSTextField(labelWithString: group.title)
+            groupTitle.font = .systemFont(ofSize: 11, weight: .semibold)
+            groupTitle.textColor = .secondaryLabelColor
+            content.addArrangedSubview(groupTitle)
+
+            for candidate in group.candidates {
+                let button = QuickCueCandidateButton(
+                    title: candidate.title,
+                    target: self,
+                    action: #selector(selectCandidate(_:))
+                )
+                button.slotID = group.slotID
+                button.candidateID = candidate.id
+                button.bezelStyle = .rounded
+                button.alignment = .left
+                button.isEnabled = candidate.isSelectable
+                button.toolTip = candidate.detail
+                button.setAccessibilityLabel(
+                    "\(candidate.title), \(candidate.detail)"
+                )
+                button.setAccessibilityHelp(
+                    candidate.isSelectable
+                        ? "Select this window for \(group.title)"
+                        : "This window is unavailable"
+                )
+                if candidate.isSelectable, shortcutNumber <= 9 {
+                    button.title = "\(candidate.title) — "
+                        + "\(candidate.detail)        ⌘\(shortcutNumber)"
+                    button.keyEquivalent = "\(shortcutNumber)"
+                    button.keyEquivalentModifierMask = [.command]
+                    shortcutNumber += 1
+                } else {
+                    button.title = "\(candidate.title) — "
+                        + "\(candidate.detail)"
+                }
+                content.addArrangedSubview(button)
+            }
+        }
+
+        let candidateCount = groups.reduce(0) {
+            $0 + $1.candidates.count
+        }
+        guard candidateCount > 4 else {
+            return content
+        }
+
+        let document = QuickCueFlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(content)
+
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = document
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            content.topAnchor.constraint(equalTo: document.topAnchor),
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(
+                equalTo: scroll.contentView.widthAnchor
+            ),
+            scroll.heightAnchor.constraint(equalToConstant: 268)
+        ])
+        scroll.setAccessibilityLabel("Quick Cue window candidates")
+        return scroll
     }
 
     private func makePreviewButtons() -> NSView {
@@ -722,6 +846,47 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     }
 
     @objc
+    private func selectCandidate(_ sender: QuickCueCandidateButton) {
+        guard let slotID = sender.slotID,
+              let candidateID = sender.candidateID,
+              case let .selectCandidate(
+                  previewID,
+                  selectedSlotID,
+                  selectedCandidateID
+              ) = session.requestCandidateSelection(
+                  slotID: slotID,
+                  candidateID: candidateID
+              ) else {
+            NSSound.beep()
+            return
+        }
+        render()
+        operationTask?.cancel()
+        operationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let preview = try await actions.selectCandidate(
+                    previewID,
+                    selectedSlotID,
+                    selectedCandidateID
+                )
+                try Task.checkCancellation()
+                guard session.finishCandidateSelection(preview) else {
+                    return
+                }
+                render()
+            } catch is CancellationError {
+                return
+            } catch {
+                session.failCandidateSelection(error.localizedDescription)
+                render()
+            }
+        }
+    }
+
+    @objc
     private func rollbackPreview() {
         guard session.requestRollback() == .rollback else {
             NSSound.beep()
@@ -812,5 +977,18 @@ private final class QuickCuePanel: NSPanel {
 
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
+    }
+}
+
+@MainActor
+private final class QuickCueCandidateButton: NSButton {
+    var slotID: UUID?
+    var candidateID: EphemeralWindowIdentifier?
+}
+
+@MainActor
+private final class QuickCueFlippedView: NSView {
+    override var isFlipped: Bool {
+        true
     }
 }
