@@ -66,6 +66,15 @@ struct TargetStructureTests {
         #expect(panel.contains("panel.makeKeyAndOrderFront(nil)"))
         #expect(panel.contains("panel.makeFirstResponder(commandField)"))
         #expect(panel.contains("cancelOperation"))
+        #expect(panel.contains("handleKeyDown"))
+        #expect(panel.contains("configureKeyViewLoop"))
+        #expect(panel.contains("QuickCueActionButton"))
+        #expect(panel.contains("focusRingType = .default"))
+        #expect(panel.contains("setAccessibilityHelp"))
+        #expect(panel.contains("setAccessibilityRole(.group)"))
+        #expect(panel.contains("accessibilityDisplayShouldReduceMotion"))
+        #expect(panel.contains("applicationToRestore.activate"))
+        #expect(!panel.contains("NotificationCenter.default.addObserver"))
         #expect(panel.contains("actions.isVoiceAvailable()"))
         #expect(panel.contains("session.transcriptNeedsConfirmation"))
         #expect(
@@ -79,6 +88,12 @@ struct TargetStructureTests {
         #expect(!panel.contains("Logger"))
         #expect(!session.contains("UserDefaults"))
         #expect(!session.contains("Logger"))
+
+        let settings = try sourceText(
+            at: "Sources/PaneCueApp/MainWindowController.swift"
+        )
+        #expect(settings.contains("Quick Cue Shortcut"))
+        #expect(settings.contains("quickCueShortcutStatus.detail"))
     }
 
     @Test

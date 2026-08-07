@@ -39,6 +39,90 @@ struct QuickCuePanelTests {
     }
 
     @Test
+    func hotKeyConflictHasASettingsSafeStatus() {
+        let conflict = GlobalHotKeyError.registrationFailed(
+            OSStatus(eventHotKeyExistsErr)
+        )
+        let unavailable = GlobalHotKeyError.registrationFailed(
+            OSStatus(paramErr)
+        )
+
+        #expect(conflict.shortcutStatus == .conflict)
+        #expect(
+            conflict.errorDescription
+                == "⌥ Space is already used by another application."
+        )
+        #expect(unavailable.shortcutStatus == .unavailable)
+        #expect(QuickCueShortcutStatus.active.title == "Available")
+    }
+
+    @Test
+    func reducedMotionDisablesEveryPanelFrameAnimation() {
+        #expect(
+            QuickCueMotionPolicy.shouldAnimate(
+                panelIsVisible: true,
+                reduceMotion: false
+            )
+        )
+        #expect(
+            !QuickCueMotionPolicy.shouldAnimate(
+                panelIsVisible: true,
+                reduceMotion: true
+            )
+        )
+        #expect(
+            !QuickCueMotionPolicy.shouldAnimate(
+                panelIsVisible: false,
+                reduceMotion: false
+            )
+        )
+    }
+
+    @Test
+    func latencyGateUsesP95AndKeepsOnlyRecentSamples() {
+        var tracker = QuickCuePerformanceTracker()
+        #expect(!tracker.snapshot.meetsLatencyGates)
+        for index in 0..<100 {
+            tracker.recordHotKeyToVisible(
+                index == 99 ? 0.9 : 0.08
+            )
+            tracker.recordPreview(
+                index == 99 ? 0.9 : 0.3,
+                fromTranscript: false
+            )
+            tracker.recordPreview(
+                index == 99 ? 0.9 : 0.3,
+                fromTranscript: true
+            )
+        }
+
+        #expect(tracker.snapshot.hotKeyToVisibleP95 == 0.08)
+        #expect(tracker.snapshot.textToPreviewP95 == 0.3)
+        #expect(tracker.snapshot.transcriptToPreviewP95 == 0.3)
+        #expect(tracker.snapshot.meetsLatencyGates)
+
+        for _ in 0..<100 {
+            tracker.recordHotKeyToVisible(0.25)
+        }
+        #expect(tracker.snapshot.hotKeyToVisibleP95 == 0.25)
+        #expect(!tracker.snapshot.meetsLatencyGates)
+    }
+
+    @Test
+    @MainActor
+    func oneHundredOpenCloseCyclesLeaveNoOrphanPanel() {
+        let controller = QuickCuePanelController(
+            actions: makeLifecycleProbeActions()
+        )
+
+        let result = controller.runLifecycleProbe(iterations: 100)
+
+        #expect(result.completedCycles == 100)
+        #expect(result.orphanWindowCount == 0)
+        #expect(result.passed)
+    }
+
+    @Test
     func draftLivesOnlyWhilePanelIsPresented() {
         var session = QuickCuePanelSession()
 
@@ -310,6 +394,32 @@ struct QuickCuePanelTests {
         #expect(panelFrame.midX == visibleFrame.midX)
         #expect(panelFrame.midY > visibleFrame.midY)
     }
+}
+
+@MainActor
+private func makeLifecycleProbeActions() -> QuickCuePanelActions {
+    QuickCuePanelActions(
+        isVoiceAvailable: { false },
+        startVoice: {},
+        stopVoice: {
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        cancelVoice: {},
+        preparePreview: { _ in
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        selectCandidate: { _, _, _ in
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        applyPreview: { _ in
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        rollback: {
+            throw QuickCueTextFlowError.previewUnavailable
+        },
+        editFullPlan: { _ in },
+        discardPreview: {}
+    )
 }
 
 private func makeQuickCuePreview() -> ArrangementPreview {

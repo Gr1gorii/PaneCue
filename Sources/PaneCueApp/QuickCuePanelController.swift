@@ -32,6 +32,13 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     private let contentStack = NSStackView()
     private var session = QuickCuePanelSession()
     private var operationTask: Task<Void, Never>?
+    private var keyboardViews: [NSView] = []
+    private var returnApplication: NSRunningApplication?
+    private var performanceTracker = QuickCuePerformanceTracker()
+
+    var performanceSnapshot: QuickCuePerformanceSnapshot {
+        performanceTracker.snapshot
+    }
 
     init(actions: QuickCuePanelActions) {
         self.actions = actions
@@ -52,17 +59,52 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     }
 
     func present() {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        if !panel.isVisible {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            if frontmost?.processIdentifier != ProcessInfo.processInfo
+                .processIdentifier {
+                returnApplication = frontmost
+            }
+        }
         session.present()
+        updateAnimationBehavior()
         render()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        if session.canEditCommand {
-            panel.makeFirstResponder(commandField)
-        }
+        focusInitialElement()
+        performanceTracker.recordHotKeyToVisible(
+            ProcessInfo.processInfo.systemUptime - startedAt
+        )
     }
 
     func dismiss() {
         dismiss(discardPreview: true)
+    }
+
+    func runLifecycleProbe(
+        iterations: Int
+    ) -> QuickCuePanelLifecycleProbeResult {
+        let cycleCount = max(0, iterations)
+        for _ in 0..<cycleCount {
+            session.present()
+            render()
+            panel.orderFront(nil)
+            dismiss(
+                discardPreview: false,
+                restorePreviousApplication: false
+            )
+        }
+        let orphanWindowCount = NSApplication.shared.windows.filter { window in
+            window is QuickCuePanel && window !== panel
+        }.count
+        return QuickCuePanelLifecycleProbeResult(
+            completedCycles: cycleCount,
+            orphanWindowCount: orphanWindowCount,
+            panelIsVisible: panel.isVisible,
+            sessionIsPresented: session.isPresented,
+            hasActiveOperation: operationTask != nil
+        )
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -128,13 +170,16 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
         commandField.isBezeled = false
         commandField.drawsBackground = false
-        commandField.focusRingType = .none
+        commandField.focusRingType = .default
         commandField.font = .systemFont(ofSize: 20, weight: .medium)
         commandField.textColor = .labelColor
         commandField.placeholderString = "What should change?"
         commandField.lineBreakMode = .byTruncatingTail
         commandField.delegate = self
         commandField.setAccessibilityLabel("Quick Cue command")
+        commandField.setAccessibilityHelp(
+            "Describe the workspace, then press Return to create a Preview."
+        )
 
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -142,7 +187,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.animationBehavior = .utilityWindow
+        panel.animationBehavior = .none
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -153,6 +198,10 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         panel.onCancel = { [weak self] in
             self?.dismiss()
         }
+        panel.onKeyDown = { [weak self] event in
+            self?.handleKeyDown(event) ?? false
+        }
+        panel.setAccessibilityLabel("Quick Cue")
     }
 
     private func render() {
@@ -160,6 +209,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             contentStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
+        keyboardViews.removeAll(keepingCapacity: true)
 
         commandField.stringValue = session.draft
         commandField.isEditable = session.canEditCommand
@@ -253,6 +303,10 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         )
         moveToActiveDisplay(size: size)
         panel.contentView?.layoutSubtreeIfNeeded()
+        configureKeyViewLoop()
+        if panel.isKeyWindow {
+            focusInitialElement()
+        }
     }
 
     private var preferredHeight: CGFloat {
@@ -299,6 +353,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             weight: .semibold
         )
         symbolView.contentTintColor = .controlAccentColor
+        symbolView.setAccessibilityElement(false)
         symbolView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             symbolView.widthAnchor.constraint(equalToConstant: 28),
@@ -306,8 +361,11 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         ])
 
         var trailingViews: [NSView] = []
+        if session.canEditCommand {
+            keyboardViews.append(commandField)
+        }
         if session.phase == .composing, actions.isVoiceAvailable() {
-            let microphone = NSButton(
+            let microphone = QuickCueActionButton(
                 image: NSImage(
                     systemSymbolName: "mic.fill",
                     accessibilityDescription: "Start offline voice"
@@ -319,7 +377,11 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             microphone.isBordered = false
             microphone.contentTintColor = .controlAccentColor
             microphone.setAccessibilityLabel("Start offline voice")
+            microphone.setAccessibilityHelp(
+                "Record a command and transcribe it on this Mac."
+            )
             trailingViews.append(microphone)
+            keyboardViews.append(microphone)
         }
 
         let hint = NSTextField(
@@ -328,6 +390,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         hint.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         hint.textColor = .tertiaryLabelColor
         hint.setContentHuggingPriority(.required, for: .horizontal)
+        hint.setAccessibilityElement(false)
         trailingViews.append(hint)
 
         let row = NSStackView(
@@ -341,10 +404,22 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     }
 
     private func makeProgressRow(_ title: String) -> NSView {
-        let progress = NSProgressIndicator()
-        progress.style = .spinning
-        progress.controlSize = .small
-        progress.startAnimation(nil)
+        let progress: NSView
+        if reduceMotion {
+            let image = NSImageView()
+            image.image = NSImage(
+                systemSymbolName: "hourglass",
+                accessibilityDescription: nil
+            )
+            image.contentTintColor = .secondaryLabelColor
+            progress = image
+        } else {
+            let indicator = NSProgressIndicator()
+            indicator.style = .spinning
+            indicator.controlSize = .small
+            indicator.startAnimation(nil)
+            progress = indicator
+        }
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.textColor = .secondaryLabelColor
@@ -352,6 +427,9 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 9
+        row.setAccessibilityElement(true)
+        row.setAccessibilityRole(.group)
+        row.setAccessibilityLabel(title)
         return row
     }
 
@@ -377,6 +455,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                 presentation.candidateGroups
             ))
         }
+        stack.setAccessibilityRole(.group)
         stack.setAccessibilityLabel("Quick Cue Preview")
         return stack
     }
@@ -423,6 +502,8 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
+        row.setAccessibilityElement(true)
+        row.setAccessibilityRole(.group)
         row.setAccessibilityLabel(
             "\(index + 1), \(slot.title), \(slot.display), "
                 + "\(slot.geometry), \(slot.state)"
@@ -464,6 +545,7 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                 button.bezelStyle = .rounded
                 button.alignment = .left
                 button.isEnabled = candidate.isSelectable
+                    && session.phase == .preview
                 button.toolTip = candidate.detail
                 button.setAccessibilityLabel(
                     "\(candidate.title), \(candidate.detail)"
@@ -484,8 +566,14 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                         + "\(candidate.detail)"
                 }
                 content.addArrangedSubview(button)
+                if button.isEnabled {
+                    keyboardViews.append(button)
+                }
             }
         }
+
+        content.setAccessibilityRole(.group)
+        content.setAccessibilityLabel("Quick Cue window candidates")
 
         let candidateCount = groups.reduce(0) {
             $0 + $1.candidates.count
@@ -524,15 +612,18 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     private func makePreviewButtons() -> NSView {
         let cancel = makeButton(
             title: "Cancel",
-            action: #selector(cancelPreview)
+            action: #selector(cancelPreview),
+            help: "Close Quick Cue without moving windows."
         )
         let edit = makeButton(
             title: "Edit Full Plan",
-            action: #selector(editFullPlan)
+            action: #selector(editFullPlan),
+            help: "Open this Preview in the full Arrange editor."
         )
         let apply = makeButton(
             title: "Apply \(session.preview?.plan.windows.count ?? 0) Windows",
-            action: #selector(applyPreview)
+            action: #selector(applyPreview),
+            help: "Revalidate and apply this Preview."
         )
         apply.bezelColor = .controlAccentColor
         apply.isEnabled = session.preview?.eligibility == .ready
@@ -544,7 +635,8 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
     private func makeTranscriptConfirmationButtons() -> NSView {
         let createPreview = makeButton(
             title: "Create Preview",
-            action: #selector(confirmTranscript)
+            action: #selector(confirmTranscript),
+            help: "Create a Preview from the edited transcript."
         )
         createPreview.bezelColor = .controlAccentColor
         return makeButtonRow([createPreview])
@@ -680,14 +772,20 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
     private func makeButton(
         title: String,
-        action: Selector
+        action: Selector,
+        help: String? = nil
     ) -> NSButton {
-        let button = NSButton(
+        let button = QuickCueActionButton(
             title: title,
             target: self,
             action: action
         )
         button.bezelStyle = .rounded
+        button.setAccessibilityLabel(title)
+        if let help {
+            button.setAccessibilityHelp(help)
+        }
+        keyboardViews.append(button)
         return button
     }
 
@@ -791,6 +889,8 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
 
     private func submitCommand() {
         commandField.stringValue = session.draft
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let startedFromTranscript = session.transcriptNeedsConfirmation
         guard case let .preparePreview(command) = session.submitCommand()
         else {
             NSSound.beep()
@@ -809,6 +909,10 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
                     return
                 }
                 render()
+                performanceTracker.recordPreview(
+                    ProcessInfo.processInfo.systemUptime - startedAt,
+                    fromTranscript: startedFromTranscript
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -917,7 +1021,10 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         guard let preview = session.preview else {
             return
         }
-        dismiss(discardPreview: false)
+        dismiss(
+            discardPreview: false,
+            restorePreviousApplication: false
+        )
         actions.editFullPlan(preview)
     }
 
@@ -926,8 +1033,13 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         dismiss()
     }
 
-    private func dismiss(discardPreview: Bool) {
+    private func dismiss(
+        discardPreview: Bool,
+        restorePreviousApplication: Bool = true
+    ) {
         let wasUsingVoice = session.isVoiceOperationActive
+        let applicationToRestore = returnApplication
+        returnApplication = nil
         operationTask?.cancel()
         operationTask = nil
         if wasUsingVoice {
@@ -935,12 +1047,115 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
         }
         session.dismiss()
         commandField.stringValue = ""
+        panel.makeFirstResponder(nil)
+        panel.resignKey()
         panel.orderOut(nil)
+        if restorePreviousApplication,
+           let applicationToRestore,
+           !applicationToRestore.isTerminated {
+            applicationToRestore.activate(options: [])
+        }
         if discardPreview {
             Task { @MainActor [actions] in
                 await actions.discardPreview()
             }
         }
+    }
+
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    private func updateAnimationBehavior() {
+        panel.animationBehavior = reduceMotion ? .none : .utilityWindow
+    }
+
+    private func configureKeyViewLoop() {
+        let views = activeKeyboardViews
+        guard !views.isEmpty else {
+            return
+        }
+        for (index, view) in views.enumerated() {
+            view.nextKeyView = views[(index + 1) % views.count]
+        }
+        panel.initialFirstResponder = views[0]
+        panel.recalculateKeyViewLoop()
+    }
+
+    private func focusInitialElement() {
+        guard let target = activeKeyboardViews.first else {
+            panel.makeFirstResponder(nil)
+            return
+        }
+        panel.makeFirstResponder(target)
+    }
+
+    private var activeKeyboardViews: [NSView] {
+        keyboardViews.filter { view in
+            guard !view.isHidden else {
+                return false
+            }
+            return (view as? NSControl)?.isEnabled ?? true
+        }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 48:
+            moveKeyboardFocus(
+                backwards: event.modifierFlags.contains(.shift)
+            )
+            return true
+        case 53:
+            dismiss()
+            return true
+        case 36, 49, 76:
+            let actionModifiers: NSEvent.ModifierFlags = [
+                .command,
+                .control,
+                .option
+            ]
+            guard event.modifierFlags.intersection(actionModifiers).isEmpty,
+                  let button = focusedButton else {
+                return false
+            }
+            button.performClick(nil)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func moveKeyboardFocus(backwards: Bool) {
+        let views = activeKeyboardViews
+        guard !views.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        let currentIndex = views.firstIndex(where: {
+            isKeyboardViewFocused($0)
+        })
+        let nextIndex: Int
+        if let currentIndex {
+            let offset = backwards ? -1 : 1
+            nextIndex = (currentIndex + offset + views.count) % views.count
+        } else {
+            nextIndex = backwards ? views.count - 1 : 0
+        }
+        panel.makeFirstResponder(views[nextIndex])
+    }
+
+    private func isKeyboardViewFocused(_ view: NSView) -> Bool {
+        if panel.firstResponder === view {
+            return true
+        }
+        return view === commandField
+            && panel.firstResponder === commandField.currentEditor()
+    }
+
+    private var focusedButton: NSButton? {
+        activeKeyboardViews
+            .first(where: { isKeyboardViewFocused($0) }) as? NSButton
     }
 
     private func moveToActiveDisplay(size: NSSize) {
@@ -959,13 +1174,22 @@ final class QuickCuePanelController: NSObject, NSTextFieldDelegate {
             preferredSize: size,
             visibleFrame: screens[index].visibleFrame
         )
-        panel.setFrame(frame, display: true, animate: panel.isVisible)
+        updateAnimationBehavior()
+        panel.setFrame(
+            frame,
+            display: true,
+            animate: QuickCueMotionPolicy.shouldAnimate(
+                panelIsVisible: panel.isVisible,
+                reduceMotion: reduceMotion
+            )
+        )
     }
 }
 
 @MainActor
 private final class QuickCuePanel: NSPanel {
     var onCancel: (() -> Void)?
+    var onKeyDown: ((NSEvent) -> Bool)?
 
     override var canBecomeKey: Bool {
         true
@@ -978,10 +1202,24 @@ private final class QuickCuePanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
     }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, onKeyDown?(event) == true {
+            return
+        }
+        super.sendEvent(event)
+    }
 }
 
 @MainActor
-private final class QuickCueCandidateButton: NSButton {
+private class QuickCueActionButton: NSButton {
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+}
+
+@MainActor
+private final class QuickCueCandidateButton: QuickCueActionButton {
     var slotID: UUID?
     var candidateID: EphemeralWindowIdentifier?
 }

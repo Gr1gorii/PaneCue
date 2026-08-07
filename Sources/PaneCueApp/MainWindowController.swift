@@ -50,6 +50,7 @@ struct PaneCueDashboardSnapshot {
     let voiceState: PaneCueVoiceState
     let canRestore: Bool
     let isAutoModeEnabled: Bool
+    let quickCueShortcutStatus: QuickCueShortcutStatus
 }
 
 struct PaneCueDashboardActions {
@@ -111,6 +112,8 @@ final class PaneCueDashboardModel: ObservableObject {
         SFSpeechRecognizer.authorizationStatus()
     @Published private(set) var hasAPIKey = false
     @Published private(set) var isAutoModeEnabled = false
+    @Published private(set) var quickCueShortcutStatus:
+        QuickCueShortcutStatus = .unavailable
     @Published private(set) var hasCompletedTextOnboarding = false
     @Published private(set) var editorRevision = 0
     @Published private(set) var arrangementRevision = 0
@@ -188,6 +191,7 @@ final class PaneCueDashboardModel: ObservableObject {
         voiceState = snapshot.voiceState
         canRestore = snapshot.canRestore
         isAutoModeEnabled = snapshot.isAutoModeEnabled
+        quickCueShortcutStatus = snapshot.quickCueShortcutStatus
         refreshPermissions()
     }
 
@@ -1451,24 +1455,6 @@ private struct PaneCueSettingsView: View {
                     Divider()
 
                     SettingRow(
-                        title: "Quick Cue",
-                        detail: "Open a private text field over the current app",
-                        systemImage: "keyboard",
-                        statusColor: .blue
-                    ) {
-                        Text("⌥ Space")
-                            .font(.body.monospaced().weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                Color.secondary.opacity(0.12),
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                    }
-
-                    Divider()
-
-                    SettingRow(
                         title: "Voice Model",
                         detail: voiceModelDetail,
                         systemImage: "waveform.badge.sparkles",
@@ -1553,6 +1539,29 @@ private struct PaneCueSettingsView: View {
                     title: "App Behavior",
                     detail: "Fast access stays available when the window is closed."
                 ) {
+                    SettingRow(
+                        title: "Quick Cue Shortcut",
+                        detail: model.quickCueShortcutStatus.detail,
+                        systemImage: "keyboard",
+                        statusColor: quickCueShortcutColor
+                    ) {
+                        HStack(spacing: 9) {
+                            Text(model.quickCueShortcutStatus.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(quickCueShortcutColor)
+                            Text("⌥ Space")
+                                .font(.body.monospaced().weight(.semibold))
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(
+                            "Quick Cue shortcut, "
+                                + model.quickCueShortcutStatus.title
+                                + ", Option Space"
+                        )
+                    }
+
+                    Divider()
+
                     if PaneCueReleaseProfile.current.isExperimental {
                         SettingRow(
                             title: "Suggestions Beta",
@@ -1622,6 +1631,17 @@ private struct PaneCueSettingsView: View {
             Text(
                 "This removes saved command corrections and local learning. Your Cues, permissions, and API key are not changed."
             )
+        }
+    }
+
+    private var quickCueShortcutColor: Color {
+        switch model.quickCueShortcutStatus {
+        case .active:
+            return .green
+        case .conflict:
+            return .orange
+        case .unavailable:
+            return .red
         }
     }
 
