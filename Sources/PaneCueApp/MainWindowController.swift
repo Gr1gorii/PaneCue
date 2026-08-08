@@ -53,6 +53,15 @@ struct PaneCueDashboardSnapshot {
     let quickCueShortcutStatus: QuickCueShortcutStatus
 }
 
+struct PaneCueApplyHistoryEntry: Identifiable, Equatable {
+    let id: UUID
+    let timestamp: Date
+    let windowCount: Int
+    let resultState: ApplyJournalResultState
+    let isCompleted: Bool
+    let canRestore: Bool
+}
+
 struct PaneCueDashboardActions {
     let runBuiltIn: @MainActor (VoiceCommandAction) -> Void
     let runCustom: @MainActor (UUID) -> Void
@@ -94,6 +103,11 @@ struct PaneCueDashboardActions {
     let cancelCommandLabListening: @MainActor () -> Void
     let makeDiagnosticsReport: @MainActor () -> String
     let resetPersonalization: @MainActor () -> Int
+    let loadApplyHistory: @MainActor () throws
+        -> [PaneCueApplyHistoryEntry]
+    let restoreApplyHistory: @MainActor
+        (UUID) throws -> ApplyRecoveryResult
+    let deleteApplyHistory: @MainActor (UUID) throws -> Bool
     let clearApplyHistory: @MainActor () throws -> Int
 }
 
@@ -116,6 +130,7 @@ final class PaneCueDashboardModel: ObservableObject {
     @Published private(set) var quickCueShortcutStatus:
         QuickCueShortcutStatus = .unavailable
     @Published private(set) var hasCompletedTextOnboarding = false
+    @Published private(set) var applyHistory: [PaneCueApplyHistoryEntry] = []
     @Published private(set) var editorRevision = 0
     @Published private(set) var arrangementRevision = 0
     @Published private(set) var arrangementPreview: ArrangementPreview?
@@ -425,6 +440,23 @@ final class PaneCueDashboardModel: ObservableObject {
         actions.makeDiagnosticsReport()
     }
 
+    func refreshApplyHistory() throws {
+        applyHistory = try actions.loadApplyHistory()
+    }
+
+    func restoreApplyHistory(id: UUID) throws -> ApplyRecoveryResult {
+        let result = try actions.restoreApplyHistory(id)
+        try refreshApplyHistory()
+        return result
+    }
+
+    @discardableResult
+    func deleteApplyHistory(id: UUID) throws -> Bool {
+        let didDelete = try actions.deleteApplyHistory(id)
+        try refreshApplyHistory()
+        return didDelete
+    }
+
     @discardableResult
     func resetPersonalization() -> Int {
         actions.resetPersonalization()
@@ -432,7 +464,9 @@ final class PaneCueDashboardModel: ObservableObject {
 
     @discardableResult
     func clearApplyHistory() throws -> Int {
-        try actions.clearApplyHistory()
+        let removedCount = try actions.clearApplyHistory()
+        try refreshApplyHistory()
+        return removedCount
     }
 
     func recordSuccessfulTextArrangement(
@@ -526,6 +560,9 @@ final class MainWindowController {
             model.selectedSection = section
         }
         model.refreshPermissions()
+        if section == .settings {
+            try? model.refreshApplyHistory()
+        }
 
         NSApp.activate(ignoringOtherApps: true)
         windowController.showWindow(nil)
@@ -1272,6 +1309,8 @@ private struct PaneCueSettingsView: View {
     @State private var diagnosticsReport: String?
     @State private var isResetConfirmationPresented = false
     @State private var isClearHistoryConfirmationPresented = false
+    @State private var pendingHistoryDeletionID: UUID?
+    @State private var historyActionMessage = ""
     @State private var privacyActionMessage = ""
 
     var body: some View {
@@ -1504,6 +1543,76 @@ private struct PaneCueSettingsView: View {
                 }
 
                 SettingsGroup(
+                    title: "Recent Apply",
+                    detail: "The last five local Apply operations."
+                ) {
+                    if model.applyHistory.isEmpty {
+                        SettingRow(
+                            title: "No Apply records yet",
+                            detail: "A record appears after you apply an arrangement",
+                            systemImage: "clock.arrow.circlepath",
+                            statusColor: .secondary
+                        ) {
+                            Button("Refresh") {
+                                refreshApplyHistory()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    } else {
+                        ForEach(
+                            Array(model.applyHistory.enumerated()),
+                            id: \.element.id
+                        ) { index, entry in
+                            ApplyHistoryRow(
+                                entry: entry,
+                                restore: {
+                                    restoreApplyHistory(entry.id)
+                                },
+                                delete: {
+                                    pendingHistoryDeletionID = entry.id
+                                }
+                            )
+                            if index < model.applyHistory.count - 1 {
+                                Divider()
+                            }
+                        }
+
+                        Divider()
+
+                        HStack(alignment: .center, spacing: 12) {
+                            Label(
+                                "Recovery requires the original app windows to remain open. PaneCue does not reopen documents or promise recovery after a Mac restart.",
+                                systemImage: "info.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            Spacer(minLength: 12)
+
+                            Button("Refresh") {
+                                refreshApplyHistory()
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Clear All…", role: .destructive) {
+                                isClearHistoryConfirmationPresented = true
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.vertical, 12)
+                    }
+
+                    if !historyActionMessage.isEmpty {
+                        Divider()
+                        Text(historyActionMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 10)
+                    }
+                }
+
+                SettingsGroup(
                     title: "Privacy & Local Data",
                     detail: "Nothing is transmitted automatically."
                 ) {
@@ -1515,20 +1624,6 @@ private struct PaneCueSettingsView: View {
                     ) {
                         Button("Preview…") {
                             diagnosticsReport = model.makeDiagnosticsReport()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Divider()
-
-                    SettingRow(
-                        title: "Clear Apply History",
-                        detail: "Remove the local recovery records for the last five Apply operations",
-                        systemImage: "clock.arrow.circlepath",
-                        statusColor: .orange
-                    ) {
-                        Button("Clear…", role: .destructive) {
-                            isClearHistoryConfirmationPresented = true
                         }
                         .buttonStyle(.bordered)
                     }
@@ -1620,6 +1715,7 @@ private struct PaneCueSettingsView: View {
 
                 Button("Refresh Status") {
                     model.refreshPermissions()
+                    refreshApplyHistory()
                 }
                 .buttonStyle(.bordered)
             }
@@ -1661,11 +1757,11 @@ private struct PaneCueSettingsView: View {
             Button("Clear", role: .destructive) {
                 do {
                     let removedCount = try model.clearApplyHistory()
-                    privacyActionMessage = removedCount == 0
+                    historyActionMessage = removedCount == 0
                         ? "Apply history was already empty."
                         : "Removed \(removedCount) Apply record\(removedCount == 1 ? "" : "s")."
                 } catch {
-                    privacyActionMessage =
+                    historyActionMessage =
                         "PaneCue could not clear Apply history."
                 }
             }
@@ -1673,6 +1769,60 @@ private struct PaneCueSettingsView: View {
             Text(
                 "This removes only local window recovery records. Your Cues, permissions, personalization, and API key are not changed."
             )
+        }
+        .alert(
+            "Delete Apply Record?",
+            isPresented: Binding(
+                get: { pendingHistoryDeletionID != nil },
+                set: { if !$0 { pendingHistoryDeletionID = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingHistoryDeletionID = nil
+            }
+            Button("Delete", role: .destructive) {
+                guard let id = pendingHistoryDeletionID else {
+                    return
+                }
+                pendingHistoryDeletionID = nil
+                do {
+                    let didDelete = try model.deleteApplyHistory(id: id)
+                    historyActionMessage = didDelete
+                        ? "Apply record deleted."
+                        : "That Apply record was already removed."
+                } catch {
+                    historyActionMessage =
+                        "PaneCue could not delete the Apply record."
+                }
+            }
+        } message: {
+            Text(
+                "This permanently removes only this local recovery record."
+            )
+        }
+        .onAppear {
+            refreshApplyHistory()
+        }
+    }
+
+    private func refreshApplyHistory() {
+        do {
+            try model.refreshApplyHistory()
+            if historyActionMessage
+                == "PaneCue could not load Apply history." {
+                historyActionMessage = ""
+            }
+        } catch {
+            historyActionMessage = "PaneCue could not load Apply history."
+        }
+    }
+
+    private func restoreApplyHistory(_ id: UUID) {
+        do {
+            let result = try model.restoreApplyHistory(id: id)
+            historyActionMessage = "\(result.title) · \(result.summary)"
+        } catch {
+            historyActionMessage = error.localizedDescription
         }
     }
 
@@ -1774,6 +1924,118 @@ private struct PaneCueSettingsView: View {
             return "No audio or command text leaves this Mac"
         case .cloud:
             return "Local models remain unloaded from memory"
+        }
+    }
+}
+
+private struct ApplyHistoryRow: View {
+    let entry: PaneCueApplyHistoryEntry
+    let restore: () -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: statusIcon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 34, height: 34)
+                .background(statusColor.opacity(0.11), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(
+                    entry.timestamp.formatted(
+                        .dateTime
+                            .month(.abbreviated)
+                            .day()
+                            .hour()
+                            .minute()
+                    )
+                )
+                .font(.body.weight(.medium))
+
+                Text(
+                    "\(entry.windowCount) window\(entry.windowCount == 1 ? "" : "s")"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text(statusTitle)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(statusColor)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(statusColor.opacity(0.11), in: Capsule())
+
+            Button("Restore", action: restore)
+                .buttonStyle(.bordered)
+                .disabled(!entry.canRestore)
+                .help(
+                    entry.canRestore
+                        ? "Restore the original frame of safely matched windows"
+                        : "The original windows are no longer available for safe recovery"
+                )
+
+            Button(role: .destructive, action: delete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .help("Delete this local Apply record")
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var statusTitle: String {
+        guard entry.isCompleted else {
+            return "Interrupted"
+        }
+        switch entry.resultState {
+        case .pending:
+            return "Interrupted"
+        case .succeeded:
+            return "Completed"
+        case .partial:
+            return "Partial"
+        case .failed:
+            return "Failed"
+        case .noChange:
+            return "No Changes"
+        }
+    }
+
+    private var statusIcon: String {
+        guard entry.isCompleted else {
+            return "exclamationmark.arrow.triangle.2.circlepath"
+        }
+        switch entry.resultState {
+        case .pending:
+            return "exclamationmark.arrow.triangle.2.circlepath"
+        case .succeeded:
+            return "checkmark.circle.fill"
+        case .partial:
+            return "exclamationmark.circle.fill"
+        case .failed:
+            return "xmark.circle.fill"
+        case .noChange:
+            return "minus.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        guard entry.isCompleted else {
+            return .orange
+        }
+        switch entry.resultState {
+        case .pending, .partial:
+            return .orange
+        case .succeeded:
+            return .green
+        case .failed:
+            return .red
+        case .noChange:
+            return .blue
         }
     }
 }

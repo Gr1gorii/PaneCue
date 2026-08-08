@@ -213,6 +213,41 @@ struct ApplyJournalTests {
         #expect(FileManager.default.fileExists(atPath: siblingURL.path))
     }
 
+    @Test
+    func deleteRemovesOnlyTheSelectedTransaction() throws {
+        let fixture = try JournalFixture()
+        defer { fixture.remove() }
+        let firstID = UUID()
+        let secondID = UUID()
+        try fixture.store.begin(
+            windows: [makeWindow(index: 4)],
+            id: firstID
+        )
+        try fixture.store.begin(
+            windows: [makeWindow(index: 5)],
+            id: secondID
+        )
+
+        #expect(try fixture.store.delete(id: firstID))
+        #expect(try fixture.store.transactions().map(\.id) == [secondID])
+        #expect(try !fixture.store.delete(id: UUID()))
+    }
+
+    @Test
+    func deletingTheLastTransactionRemovesTheJournalFile() throws {
+        let fixture = try JournalFixture()
+        defer { fixture.remove() }
+        let id = UUID()
+        try fixture.store.begin(
+            windows: [makeWindow(index: 6)],
+            id: id
+        )
+
+        #expect(try fixture.store.delete(id: id))
+        #expect(!FileManager.default.fileExists(atPath: fixture.fileURL.path))
+        #expect(try fixture.store.transactions().isEmpty)
+    }
+
     private func makeWindow(index: Int) -> ApplyJournalWindowRecord {
         ApplyJournalWindowRecord(
             applicationBundleIdentifier: "com.example.app\(index)",
