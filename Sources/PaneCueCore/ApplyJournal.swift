@@ -207,6 +207,24 @@ public final class ApplyJournalStore {
     }
 
     @discardableResult
+    public func delete(id: UUID) throws -> Bool {
+        var snapshot = try loadSnapshot()
+        let previousCount = snapshot.transactions.count
+        snapshot.transactions.removeAll { $0.id == id }
+        guard snapshot.transactions.count != previousCount else {
+            return false
+        }
+        if snapshot.transactions.isEmpty {
+            if fileManager.fileExists(atPath: fileURL.path) {
+                try fileManager.removeItem(at: fileURL)
+            }
+        } else {
+            try write(snapshot)
+        }
+        return true
+    }
+
+    @discardableResult
     public func clear() throws -> Int {
         let count = (try? loadSnapshot().transactions.count) ?? 0
         guard fileManager.fileExists(atPath: fileURL.path) else {

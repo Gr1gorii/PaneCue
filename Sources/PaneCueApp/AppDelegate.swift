@@ -306,6 +306,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
                 return removedCount
             },
+            loadApplyHistory: { [weak self] in
+                guard let self else {
+                    return []
+                }
+                let transactions = try applyJournal.transactions()
+                let restorableIDs = (
+                    try? windowManager.restorableJournalTransactionIDs(
+                        transactions
+                    )
+                ) ?? []
+                return transactions.reversed().map { transaction in
+                    PaneCueApplyHistoryEntry(
+                        id: transaction.id,
+                        timestamp: transaction.timestamp,
+                        windowCount: transaction.windows.count,
+                        resultState: transaction.resultState,
+                        isCompleted: transaction.isCompleted,
+                        canRestore: restorableIDs.contains(transaction.id)
+                    )
+                }
+            },
+            restoreApplyHistory: { [weak self] transactionID in
+                guard let self else {
+                    throw CommandLabError.unavailable
+                }
+                guard let transaction = try applyJournal.transactions()
+                    .first(where: { $0.id == transactionID }) else {
+                    throw PaneCueWindowError.operationFailed(
+                        details: "This Apply record is no longer available."
+                    )
+                }
+                try ensureAccessibilityForApply()
+                let result = if transaction.isCompleted {
+                    try windowManager.restoreJournalTransaction(transaction)
+                } else {
+                    try windowManager.recoverInterruptedApply(transaction)
+                }
+                updateMenuState(message: result.summary)
+                featureProvider.autoModeWorkspaceMayHaveChanged()
+                return result
+            },
+            deleteApplyHistory: { [weak self] transactionID in
+                guard let self else {
+                    return false
+                }
+                let didDelete = try applyJournal.delete(id: transactionID)
+                if didDelete {
+                    updateMenuState(message: "Apply record deleted")
+                }
+                return didDelete
+            },
             clearApplyHistory: { [weak self] in
                 guard let self else {
                     return 0

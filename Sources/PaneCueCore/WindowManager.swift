@@ -675,14 +675,56 @@ public final class WindowManager {
             )
         }
 
+        return try restoreJournalTransaction(
+            transaction,
+            persistPendingCompletion: true
+        )
+    }
+
+    public func restorableJournalTransactionIDs(
+        _ transactions: [ApplyJournalTransaction]
+    ) throws -> Set<UUID> {
+        guard hasAccessibilityPermission else {
+            return []
+        }
+
         let windows = try eligibleWindows()
-        let candidates = windows.map { window in
-            ApplyRecoveryCandidate(
-                windowIdentifier: ephemeralIdentifier(for: window),
-                applicationBundleIdentifier: window.bundleIdentifier,
-                processIdentifier: Int32(window.processIdentifier)
+        let candidates = recoveryCandidates(from: windows)
+        let displaySignatures = ScreenGeometry.availableDisplaySignatures
+        return Set(transactions.compactMap { transaction in
+            let plan = ApplyRecoveryPlanner.plan(
+                transaction: transaction,
+                candidates: candidates,
+                availableDisplaySignatures: displaySignatures
+            )
+            return plan.restorableWindowCount > 0 ? transaction.id : nil
+        })
+    }
+
+    public func restoreJournalTransaction(
+        _ transaction: ApplyJournalTransaction
+    ) throws -> ApplyRecoveryResult {
+        guard transaction.isCompleted else {
+            throw PaneCueWindowError.operationFailed(
+                details: "This interrupted layout must use recovery."
             )
         }
+        return try restoreJournalTransaction(
+            transaction,
+            persistPendingCompletion: false
+        )
+    }
+
+    private func restoreJournalTransaction(
+        _ transaction: ApplyJournalTransaction,
+        persistPendingCompletion: Bool
+    ) throws -> ApplyRecoveryResult {
+        guard hasAccessibilityPermission else {
+            throw PaneCueWindowError.accessibilityPermissionRequired
+        }
+
+        let windows = try eligibleWindows()
+        let candidates = recoveryCandidates(from: windows)
         let plan = ApplyRecoveryPlanner.plan(
             transaction: transaction,
             candidates: candidates,
@@ -728,6 +770,15 @@ public final class WindowManager {
             )
         }
 
+        guard persistPendingCompletion else {
+            logger.info("Restored an Apply history record")
+            return ApplyRecoveryResult(
+                transactionID: transaction.id,
+                outcomes: outcomes,
+                didPersistCompletion: true
+            )
+        }
+
         let provisionalResult = ApplyRecoveryResult(
             transactionID: transaction.id,
             outcomes: outcomes,
@@ -756,6 +807,18 @@ public final class WindowManager {
             outcomes: outcomes,
             didPersistCompletion: didPersistCompletion
         )
+    }
+
+    private func recoveryCandidates(
+        from windows: [ManagedWindow]
+    ) -> [ApplyRecoveryCandidate] {
+        windows.map { window in
+            ApplyRecoveryCandidate(
+                windowIdentifier: ephemeralIdentifier(for: window),
+                applicationBundleIdentifier: window.bundleIdentifier,
+                processIdentifier: Int32(window.processIdentifier)
+            )
+        }
     }
 
     public func restorePreviousLayout() throws -> String {
