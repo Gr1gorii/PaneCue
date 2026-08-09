@@ -12,6 +12,10 @@ video, and optional voice commands.
 PaneCue source code is available under the
 [Mozilla Public License 2.0](LICENSE).
 
+## Integrations
+
+- [Apple Shortcuts and Raycast](docs/integrations/apple-shortcuts.md)
+
 ## v0.1 Product Freeze
 
 The public-beta product contract is defined by:
@@ -142,6 +146,13 @@ To build the separate experimental app:
 ./scripts/package_app.sh --experimental
 open "build/PaneCue Experimental.app"
 ```
+
+The two applications are separate SwiftPM products. `PaneCue` depends on
+`PaneCueApp` only; `PaneCueExperimental` links the additional
+`PaneCueExperimentalFeatures` target. Experimental implementations are not a
+dependency of the stable executable. `PaneCueApp` communicates with optional
+capabilities only through `PaneCueFeatureProvider`; the experimental
+executable injects its provider during launch.
 
 The PaneCue Experimental first-launch setup lets you choose how voice commands are processed:
 

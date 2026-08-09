@@ -4,6 +4,49 @@ import Testing
 @Suite("Workspace Apply preflight")
 struct WorkspaceApplyPreflightTests {
     @Test
+    func selectedCandidateResolvesAnOtherwiseAmbiguousSlot() {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let selectedSlot = scenario.windows[0]
+        let decisions = WorkspaceApplyPreflight.evaluate(
+            scenario: scenario,
+            inventory: [
+                item("browser-one", role: .browser),
+                item("browser-two", role: .browser)
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false,
+            selectedCandidateIDsBySlot: [
+                selectedSlot.id: "browser-two"
+            ]
+        )
+
+        #expect(
+            decisions[0].status == .ready(candidateID: "browser-two")
+        )
+        #expect(decisions[0].candidateIDs == ["browser-two"])
+    }
+
+    @Test
+    func frozenCandidateDoesNotFallBackToAReplacementAtApplyTime() {
+        let scenario = makeScenario(
+            targets: [ScenarioWindowTarget(role: .browser)]
+        )
+        let slotID = scenario.windows[0].id
+        let decisions = WorkspaceApplyPreflight.evaluate(
+            scenario: scenario,
+            inventory: [item("replacement-window", role: .browser)],
+            hasExternalDisplay: false,
+            hasActiveCall: false,
+            selectedCandidateIDsBySlot: [slotID: "closed-window"]
+        )
+
+        #expect(decisions[0].status == .missing)
+        #expect(decisions[0].candidateIDs.isEmpty)
+    }
+
+    @Test
     func detectsClosedAndAmbiguousTargetsWithoutChoosingSilently() {
         let scenario = makeScenario(
             targets: [

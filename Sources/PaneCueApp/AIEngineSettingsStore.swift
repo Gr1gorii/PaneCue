@@ -1,0 +1,96 @@
+import Combine
+import Foundation
+import PaneCueCore
+
+@MainActor
+public final class AIEngineSettingsStore: ObservableObject {
+    @Published public var processingMode: AIProcessingMode {
+        didSet {
+            defaults.set(
+                processingMode.rawValue,
+                forKey: PaneCuePersistenceKey.processingMode
+            )
+            modeDidChange?(processingMode)
+        }
+    }
+
+    @Published public var localCommandModel: LocalCommandModel {
+        didSet {
+            defaults.set(
+                localCommandModel.rawValue,
+                forKey: PaneCuePersistenceKey.localCommandModel
+            )
+        }
+    }
+
+    public var modeDidChange: ((AIProcessingMode) -> Void)?
+
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if PaneCueReleaseProfile.current.isExperimental {
+            processingMode = AIProcessingMode(
+                rawValue: defaults.string(
+                    forKey: PaneCuePersistenceKey.processingMode
+                ) ?? ""
+            ) ?? .automatic
+            localCommandModel = LocalCommandModel(
+                rawValue: defaults.string(
+                    forKey: PaneCuePersistenceKey.localCommandModel
+                ) ?? ""
+            ) ?? .smart
+        } else {
+            processingMode = .offline
+            localCommandModel = .smart
+        }
+    }
+}
+
+extension AIProcessingMode {
+    var displayName: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .offline:
+            return "Offline Only"
+        case .cloud:
+            return "Cloud Only"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .automatic:
+            return "Cloud while online, local models without internet"
+        case .offline:
+            return "Audio and commands stay entirely on this Mac"
+        case .cloud:
+            return "Use OpenAI and keep local models out of memory"
+        }
+    }
+}
+
+extension LocalCommandModel {
+    var displayName: String {
+        switch self {
+        case .smart:
+            return "PaneCue Mini"
+        case .functionGemma:
+            return "FunctionGemma"
+        case .qwen:
+            return "PaneCue Qwen"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .smart:
+            return "499,975 parameters • ~500 KB • negligible memory use"
+        case .functionGemma:
+            return "Optional experiment • about 320 MB while active"
+        case .qwen:
+            return "Optional fallback • about 1.9 GB while active"
+        }
+    }
+}

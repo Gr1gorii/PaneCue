@@ -5,6 +5,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="main"
 APP_NAME="PaneCue"
+PRODUCT_NAME="PaneCue"
+EXECUTABLE_NAME="PaneCue"
 INFO_PLIST="${PROJECT_DIR}/Resources/Info.plist"
 BUNDLE_ID="io.github.gr1gorii.PaneCue"
 ENTITLEMENTS="${PROJECT_DIR}/Resources/PaneCue.entitlements"
@@ -23,6 +25,8 @@ while [[ $# -gt 0 ]]; do
         --experimental)
             PROFILE="experimental"
             APP_NAME="PaneCue Experimental"
+            PRODUCT_NAME="PaneCueExperimental"
+            EXECUTABLE_NAME="PaneCueExperimental"
             INFO_PLIST="${PROJECT_DIR}/Resources/Info-Experimental.plist"
             BUNDLE_ID="io.github.gr1gorii.PaneCue.experimental"
             ENTITLEMENTS="${PROJECT_DIR}/Resources/PaneCue-Experimental.entitlements"
@@ -51,11 +55,16 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 RUNTIME_DIR="${RESOURCES_DIR}/Runtime"
 MODELS_DIR="${RESOURCES_DIR}/Models"
 
-swift build --package-path "${PROJECT_DIR}" -c release
+swift build \
+    --package-path "${PROJECT_DIR}" \
+    -c release \
+    --product "${PRODUCT_NAME}"
 
 rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RUNTIME_DIR}" "${MODELS_DIR}"
-cp -f "${PROJECT_DIR}/.build/release/PaneCue" "${MACOS_DIR}/PaneCue"
+cp -f \
+    "${PROJECT_DIR}/.build/release/${EXECUTABLE_NAME}" \
+    "${MACOS_DIR}/PaneCue"
 cp -f "${INFO_PLIST}" "${CONTENTS_DIR}/Info.plist"
 cp -f "${PROJECT_DIR}/Resources/PaneCue.icns" \
     "${RESOURCES_DIR}/PaneCue.icns"

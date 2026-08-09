@@ -1,0 +1,429 @@
+import Foundation
+import PaneCueCore
+import Testing
+@testable import PaneCueApp
+
+@Suite("Arrange coordinator integration")
+@MainActor
+struct ArrangeCoordinatorControllerTests {
+    @Test
+    func previewApplyAndRollbackUseOneCoordinator() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+        let plan = makeArrangePlan()
+
+        let analysis = try await controller.prepare(
+            .plan(plan, summary: "Preview ready")
+        )
+        guard case let .plan(preparedPlan, summary) = analysis else {
+            Issue.record("Arrange did not return a coordinated Preview")
+            return
+        }
+
+        #expect(preparedPlan == plan)
+        #expect(summary == "Preview ready")
+        #expect((await controller.currentState()).phase == .ready)
+        #expect(await recorder.applyCount() == 0)
+
+        let result = try await controller.apply(preparedPlan)
+        #expect(result.didChangeAnyWindow)
+        #expect((await controller.currentState()).phase == .result)
+        #expect(await recorder.applyCount() == 1)
+
+        let rollbackSummary = try await controller.rollback()
+        #expect(rollbackSummary == "Layout restored")
+        #expect((await controller.currentState()).phase == .idle)
+        #expect(await recorder.rollbackCount() == 1)
+    }
+
+    @Test
+    func editingAndDiscardNeverCrossTheExecutionBoundary() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+
+        await controller.beginEditing()
+        #expect((await controller.currentState()).phase == .editing)
+
+        _ = try await controller.prepare(
+            .plan(makeArrangePlan(), summary: "Preview ready")
+        )
+        await controller.discard()
+
+        let state = await controller.currentState()
+        #expect(state.phase == .idle)
+        #expect(state.preview == nil)
+        #expect(await recorder.applyCount() == 0)
+        #expect(await recorder.rollbackCount() == 0)
+    }
+
+    @Test
+    func savedArrangementActionStillBecomesACoordinatedPreview() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+
+        let analysis = try await controller.prepare(
+            .action(
+                VoiceCommandIntent(action: .applyNotesAndBrowser)
+            )
+        )
+
+        guard case let .plan(plan, _) = analysis else {
+            Issue.record("Saved arrangement action bypassed Preview")
+            return
+        }
+
+        #expect(plan.windows.count == 2)
+        #expect((await controller.currentState()).phase == .ready)
+        #expect(await recorder.applyCount() == 0)
+    }
+
+    @Test
+    func quickCueTextCreatesPreviewWithoutApply() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+
+        _ = try await controller.prepare(
+            .plan(makeArrangePlan(), summary: "Preview ready"),
+            source: .quickCue
+        )
+
+        let state = await controller.currentState()
+        #expect(state.phase == .ready)
+        #expect(state.preview?.source == .quickCue)
+        #expect(await recorder.applyCount() == 0)
+        #expect(await recorder.rollbackCount() == 0)
+    }
+
+    @Test
+    func savedCuePreviewUsesSavedCueMappingReasons() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let savedCue = CustomScenario(
+            name: "Focus Cue",
+            windows: [
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .browser),
+                    gridRect: .left
+                ),
+                ScenarioWindowSlot(
+                    target: ScenarioWindowTarget(role: .notes),
+                    gridRect: .right
+                )
+            ]
+        )
+        let controller = ArrangeCoordinatorController(
+            resolve: { draft in
+                WorkspaceTargetResolver.resolve(
+                    scenario: CustomScenario(
+                        name: draft.plan.name,
+                        windows: draft.plan.windows
+                    ),
+                    inventory: [
+                        WorkspaceWindowInventoryItem(
+                            id: "browser-window",
+                            bundleIdentifier: "com.example.Browser",
+                            applicationName: "Browser",
+                            role: .browser
+                        ),
+                        WorkspaceWindowInventoryItem(
+                            id: "notes-window",
+                            bundleIdentifier: "com.example.Notes",
+                            applicationName: "Notes",
+                            role: .notes
+                        )
+                    ],
+                    hasExternalDisplay: false,
+                    hasActiveCall: false,
+                    requestSource: draft.source
+                )
+            },
+            apply: { plan, _ in
+                await recorder.recordApply()
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .action(
+                VoiceCommandIntent(
+                    action: .applyCustomScenario,
+                    arguments: ["scenario_name": savedCue.name]
+                )
+            ),
+            savedScenarios: [savedCue]
+        )
+
+        let preview = try #require(
+            (await controller.currentState()).preview
+        )
+        #expect(preview.source == .savedCue)
+        let reasons = try #require(preview.resolution).slots.compactMap {
+            slot -> ArrangementTargetMatchReason? in
+            guard case let .resolved(target) = slot.state else {
+                return nil
+            }
+            return target.matchReason
+        }
+        #expect(reasons == [.savedCueMapping, .savedCueMapping])
+        #expect(await recorder.applyCount() == 0)
+    }
+
+    @Test
+    func oneWindowDraftKeepsTheExistingApplyError() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let controller = makeController(recorder: recorder)
+        let plan = WorkspacePlan.tiled(
+            targets: [ScenarioWindowTarget(role: .ide)]
+        )
+
+        do {
+            _ = try await controller.apply(plan)
+            Issue.record("A one-window draft crossed the Apply boundary")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Add at least two windows before applying this plan."
+            )
+        }
+
+        #expect(await recorder.applyCount() == 0)
+    }
+
+    @Test
+    func ambiguousPreviewAppliesOnlyAfterTheExactSelection() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let plan = makeArrangePlan()
+        let first = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-one"
+            ),
+            bundleIdentifier: "com.example.Editor",
+            display: .main,
+            localizedApplicationName: "Editor"
+        )
+        let second = ArrangementTargetCandidate(
+            windowIdentifier: EphemeralWindowIdentifier(
+                rawValue: "candidate-two"
+            ),
+            bundleIdentifier: "com.example.Editor",
+            display: .main,
+            localizedApplicationName: "Editor"
+        )
+        let resolution = ArrangementTargetResolutionSet(
+            slots: [
+                ArrangementSlotResolution(
+                    id: plan.windows[0].id,
+                    state: .ambiguous(candidateCount: 2),
+                    candidates: [first, second]
+                ),
+                ArrangementSlotResolution(
+                    id: plan.windows[1].id,
+                    state: .resolved(
+                        ResolvedArrangementTarget(
+                            bundleIdentifier: "com.example.Notes",
+                            windowIdentifier: EphemeralWindowIdentifier(
+                                rawValue: "notes-window"
+                            ),
+                            display: .main,
+                            matchReason: .matchedRole(.notes),
+                            localizedApplicationName: "Notes"
+                        )
+                    )
+                )
+            ]
+        )
+        let controller = ArrangeCoordinatorController(
+            resolve: { _ in resolution },
+            apply: { plan, selectedResolution in
+                await recorder.recordApply(
+                    selectedCandidateIDsBySlot:
+                        selectedResolution?.selectedCandidateIDsBySlot ?? [:]
+                )
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .plan(plan, summary: "Preview ready")
+        )
+        let blocked = await controller.currentState()
+        #expect(blocked.phase == .awaitingSelection)
+        #expect(await recorder.applyCount() == 0)
+
+        let previewID = try #require(blocked.preview?.id)
+        _ = try await controller.selectCandidate(
+            previewID: previewID,
+            slotID: plan.windows[0].id,
+            candidateID: second.windowIdentifier
+        )
+        #expect((await controller.currentState()).phase == .ready)
+
+        _ = try await controller.apply(plan)
+        #expect(await recorder.applyCount() == 1)
+        #expect(
+            await recorder.selectedCandidateID(for: plan.windows[0].id)
+                == "candidate-two"
+        )
+    }
+
+    @Test
+    func applyRevalidationRejectsAReplacementBeforeExecution() async throws {
+        let recorder = ArrangeExecutionRecorder()
+        let plan = makeArrangePlan()
+        let scenario = try #require(plan.scenario(named: "Arrange"))
+        let initial = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                WorkspaceWindowInventoryItem(
+                    id: "original-editor",
+                    bundleIdentifier: "com.example.Editor",
+                    applicationName: "Editor",
+                    role: .ide
+                ),
+                WorkspaceWindowInventoryItem(
+                    id: "notes-window",
+                    bundleIdentifier: "com.example.Notes",
+                    applicationName: "Notes",
+                    role: .notes
+                )
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let fresh = WorkspaceTargetResolver.resolve(
+            scenario: scenario,
+            inventory: [
+                WorkspaceWindowInventoryItem(
+                    id: "replacement-editor",
+                    bundleIdentifier: "com.example.Editor",
+                    applicationName: "Editor",
+                    role: .ide
+                ),
+                WorkspaceWindowInventoryItem(
+                    id: "notes-window",
+                    bundleIdentifier: "com.example.Notes",
+                    applicationName: "Notes",
+                    role: .notes
+                )
+            ],
+            hasExternalDisplay: false,
+            hasActiveCall: false
+        )
+        let sequence = ArrangeResolutionSequence([initial, fresh])
+        let controller = ArrangeCoordinatorController(
+            resolve: { _ in await sequence.next() },
+            apply: { plan, _ in
+                await recorder.recordApply()
+                return makeArrangeResult(for: plan)
+            },
+            rollback: { "Layout restored" }
+        )
+
+        _ = try await controller.prepare(
+            .plan(plan, summary: "Preview ready")
+        )
+        do {
+            _ = try await controller.apply(plan)
+            Issue.record("A replacement window crossed the Apply boundary")
+        } catch let error as ArrangementCoordinatorError {
+            #expect(error == .previewNotReady)
+        }
+
+        let state = await controller.currentState()
+        #expect(state.phase == .awaitingSelection)
+        #expect(
+            state.preview?.resolution?[plan.windows[0].id]?.state
+                == .ambiguous(candidateCount: 1)
+        )
+        #expect(await recorder.applyCount() == 0)
+    }
+
+    private func makeController(
+        recorder: ArrangeExecutionRecorder
+    ) -> ArrangeCoordinatorController {
+        ArrangeCoordinatorController(
+            apply: { plan in
+                await recorder.recordApply()
+                return makeArrangeResult(for: plan)
+            },
+            rollback: {
+                await recorder.recordRollback()
+                return "Layout restored"
+            }
+        )
+    }
+}
+
+private actor ArrangeResolutionSequence {
+    private var values: [ArrangementTargetResolutionSet]
+
+    init(_ values: [ArrangementTargetResolutionSet]) {
+        self.values = values
+    }
+
+    func next() -> ArrangementTargetResolutionSet {
+        if values.count > 1 {
+            return values.removeFirst()
+        }
+        return values[0]
+    }
+}
+
+private actor ArrangeExecutionRecorder {
+    private var applies = 0
+    private var rollbacks = 0
+    private var selectedCandidateIDsBySlot: [UUID: String] = [:]
+
+    func recordApply() {
+        applies += 1
+    }
+
+    func recordApply(
+        selectedCandidateIDsBySlot: [UUID: String]
+    ) {
+        applies += 1
+        self.selectedCandidateIDsBySlot = selectedCandidateIDsBySlot
+    }
+
+    func recordRollback() {
+        rollbacks += 1
+    }
+
+    func applyCount() -> Int {
+        applies
+    }
+
+    func rollbackCount() -> Int {
+        rollbacks
+    }
+
+    func selectedCandidateID(for slotID: UUID) -> String? {
+        selectedCandidateIDsBySlot[slotID]
+    }
+}
+
+private func makeArrangePlan() -> WorkspacePlan {
+    WorkspacePlan.tiled(
+        targets: [
+            ScenarioWindowTarget(role: .ide),
+            ScenarioWindowTarget(role: .notes)
+        ]
+    )
+}
+
+private func makeArrangeResult(
+    for plan: WorkspacePlan
+) -> WorkspaceApplyResult {
+    WorkspaceApplyResult(
+        scenarioName: "Arrange",
+        outcomes: plan.windows.map { slot in
+            WorkspaceApplyOutcome(
+                id: slot.id,
+                targetName: slot.target.displayName,
+                status: .moved
+            )
+        },
+        canRollback: true
+    )
+}

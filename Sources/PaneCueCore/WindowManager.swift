@@ -17,8 +17,15 @@ public final class WindowManager {
 
     private var activeSnapshot: [WindowSnapshot]?
     private var activeScenarioName: String?
+    private let applyJournal: ApplyJournalStore
+    private let transactionLifecycle: ApplyTransactionLifecycle
 
-    public init() {}
+    public init(applyJournal: ApplyJournalStore = ApplyJournalStore()) {
+        self.applyJournal = applyJournal
+        transactionLifecycle = ApplyTransactionLifecycle(
+            journal: applyJournal
+        )
+    }
 
     public var hasAccessibilityPermission: Bool {
         AXIsProcessTrusted()
@@ -232,8 +239,45 @@ public final class WindowManager {
         try applyCustomLayoutDetailed(scenario).summary
     }
 
+    /// Resolves the current local AX inventory for an Arrange Preview.
+    /// Window titles are passed only as in-memory chooser differentiators and
+    /// are never logged or persisted by PaneCue Core.
+    public func previewResolution(
+        for plan: WorkspacePlan,
+        requestSource: ArrangementRequestSource = .arrange
+    ) throws -> ArrangementTargetResolutionSet {
+        let windows = try eligibleWindows()
+        let inventoryPairs = workspaceInventory(from: windows)
+        let differentiators = inventoryPairs.reduce(
+            into: [EphemeralWindowIdentifier: String]()
+        ) { result, pair in
+            let value = pair.window.title.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            if !value.isEmpty {
+                result[
+                    EphemeralWindowIdentifier(rawValue: pair.item.id)
+                ] = value
+            }
+        }
+        return WorkspaceTargetResolver.resolve(
+            scenario: CustomScenario(
+                name: plan.name,
+                windows: plan.windows
+            ),
+            inventory: inventoryPairs.map(\.item),
+            hasExternalDisplay: ScreenGeometry.hasExternalDisplay,
+            hasActiveCall: windows.contains {
+                role(of: $0) == .meeting
+            },
+            requestSource: requestSource,
+            localDifferentiators: differentiators
+        )
+    }
+
     public func applyCustomLayoutDetailed(
-        _ scenario: CustomScenario
+        _ scenario: CustomScenario,
+        resolution: ArrangementTargetResolutionSet? = nil
     ) throws -> WorkspaceApplyResult {
         guard hasAccessibilityPermission else {
             throw PaneCueWindowError.accessibilityPermissionRequired
@@ -256,21 +300,7 @@ public final class WindowManager {
 
         var resolved: [ResolvedWindowSelection] = []
         var outcomesBySlot: [UUID: WorkspaceApplyOutcome] = [:]
-        let inventoryPairs = windows.enumerated().map { index, window in
-            let identifier = "candidate-\(index)"
-            return (
-                item: WorkspaceWindowInventoryItem(
-                    id: identifier,
-                    bundleIdentifier: window.bundleIdentifier,
-                    applicationName: window.applicationName,
-                    role: role(of: window),
-                    isMinimized: window.isMinimized,
-                    isFullScreen: window.isFullScreen,
-                    canSetFrame: AXHelpers.canSetFrame(on: window.element)
-                ),
-                window: window
-            )
-        }
+        let inventoryPairs = workspaceInventory(from: windows)
         let windowsByCandidateID = Dictionary(
             uniqueKeysWithValues: inventoryPairs.map {
                 ($0.item.id, $0.window)
@@ -282,7 +312,9 @@ public final class WindowManager {
             hasExternalDisplay: ScreenGeometry.hasExternalDisplay,
             hasActiveCall: windows.contains {
                 role(of: $0) == .meeting
-            }
+            },
+            selectedCandidateIDsBySlot:
+                resolution?.selectedCandidateIDsBySlot ?? [:]
         )
 
         // Resolve from a fresh AX inventory at Apply time. The preview names
@@ -487,103 +519,306 @@ public final class WindowManager {
         // Snapshot every changeable target before the first window moves.
         // A failed write can still partially resize a window, so every actual
         // write attempt enables Rollback even when verification later fails.
-        var didAttemptMutation = false
-        for preparedSelection in prepared {
-            let selection = preparedSelection.selection
-            let slot = selection.slot
-            let window = selection.window
+        guard !prepared.isEmpty else {
+            let result = workspaceApplyResult(
+                scenario: scenario,
+                outcomesBySlot: outcomesBySlot,
+                canRollback: false
+            )
+            logger.info("Completed a workspace Apply transaction")
+            return result
+        }
 
-            guard AXHelpers.frame(of: window.element) != nil else {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
-                    status: .failed,
-                    reason: "The window closed while the layout was being applied."
+        let execution = try transactionLifecycle.execute(
+            windows: prepared.map { preparedSelection in
+                applyJournalRecord(
+                    window: preparedSelection.selection.window,
+                    snapshot: preparedSelection.snapshot
                 )
-                continue
             }
+        ) {
+            var didAttemptMutation = false
+            for preparedSelection in prepared {
+                let selection = preparedSelection.selection
+                let slot = selection.slot
+                let window = selection.window
 
-            let isFullScreen = AXHelpers.copyBool(
-                from: window.element,
-                attribute: AXHelpers.fullScreenAttribute
-            ) ?? false
-            let isMinimized = AXHelpers.copyBool(
-                from: window.element,
-                attribute: kAXMinimizedAttribute as CFString
-            ) ?? false
-            guard !isFullScreen, !isMinimized,
-                  AXHelpers.canSetFrame(on: window.element) else {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
-                    status: .skipped,
-                    reason: "The window changed state while the layout was being applied. Preview it again."
-                )
-                continue
-            }
-
-            didAttemptMutation = true
-            do {
-                try AXHelpers.setFrame(
-                    selection.targetFrame,
-                    on: window.element
-                )
-                guard let appliedFrame = AXHelpers.frame(of: window.element),
-                      framesApproximatelyEqual(
-                          appliedFrame,
-                          selection.targetFrame,
-                          tolerance: 8
-                      ) else {
+                guard AXHelpers.frame(of: window.element) != nil else {
                     outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                         id: slot.id,
                         targetName: slot.target.displayName,
                         applicationName: window.applicationName,
                         status: .failed,
-                        reason: "The application constrained the requested size or position."
+                        reason: "The window closed while the layout was being applied."
                     )
                     continue
                 }
-                movedSelections.append(selection)
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
-                    status: .moved
+
+                let isFullScreen = AXHelpers.copyBool(
+                    from: window.element,
+                    attribute: AXHelpers.fullScreenAttribute
+                ) ?? false
+                let isMinimized = AXHelpers.copyBool(
+                    from: window.element,
+                    attribute: kAXMinimizedAttribute as CFString
+                ) ?? false
+                guard !isFullScreen, !isMinimized,
+                      AXHelpers.canSetFrame(on: window.element) else {
+                    outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                        id: slot.id,
+                        targetName: slot.target.displayName,
+                        applicationName: window.applicationName,
+                        status: .skipped,
+                        reason: "The window changed state while the layout was being applied. Preview it again."
+                    )
+                    continue
+                }
+
+                didAttemptMutation = true
+                do {
+                    try AXHelpers.setFrame(
+                        selection.targetFrame,
+                        on: window.element
+                    )
+                    var appliedFrame = AXHelpers.frame(of: window.element)
+                    if appliedFrame.map({
+                        !framesApproximatelyEqual(
+                            $0,
+                            selection.targetFrame,
+                            tolerance: 8
+                        )
+                    }) ?? true {
+                        // Notes and some AppKit windows settle their new size
+                        // before accepting the final requested edge.
+                        Thread.sleep(forTimeInterval: 0.12)
+                        try AXHelpers.setFrame(
+                            selection.targetFrame,
+                            on: window.element
+                        )
+                        appliedFrame = AXHelpers.frame(of: window.element)
+                    }
+                    guard let appliedFrame,
+                          framesApproximatelyEqual(
+                              appliedFrame,
+                              selection.targetFrame,
+                              tolerance: 8
+                          ) else {
+                        outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                            id: slot.id,
+                            targetName: slot.target.displayName,
+                            applicationName: window.applicationName,
+                            status: .failed,
+                            reason: "The application constrained the requested size or position."
+                        )
+                        continue
+                    }
+                    movedSelections.append(selection)
+                    outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                        id: slot.id,
+                        targetName: slot.target.displayName,
+                        applicationName: window.applicationName,
+                        status: .moved
+                    )
+                } catch {
+                    outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
+                        id: slot.id,
+                        targetName: slot.target.displayName,
+                        applicationName: window.applicationName,
+                        status: .failed,
+                        reason: error.localizedDescription
+                    )
+                }
+            }
+
+            for selection in movedSelections.reversed() {
+                AXHelpers.raise(selection.window.element)
+            }
+
+            if didAttemptMutation {
+                activeSnapshot = prepared.map(\.snapshot)
+                activeScenarioName = movedSelections.isEmpty
+                    ? nil
+                    : scenario.name
+            }
+
+            let result = workspaceApplyResult(
+                scenario: scenario,
+                outcomesBySlot: outcomesBySlot,
+                canRollback: didAttemptMutation
+            )
+            return ApplyTransactionCompletion(
+                value: result,
+                resultState: applyJournalResultState(for: result),
+                windowResults: applyJournalWindowResults(
+                    prepared: prepared,
+                    outcomesBySlot: outcomesBySlot
                 )
-            } catch {
-                outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                    id: slot.id,
-                    targetName: slot.target.displayName,
-                    applicationName: window.applicationName,
-                    status: .failed,
-                    reason: error.localizedDescription
-                )
+            )
+        }
+        if !execution.didPersistCompletion {
+            logger.error("Could not complete the local Apply journal record")
+        }
+        logger.info("Completed a workspace Apply transaction")
+        return execution.value
+    }
+
+    public func recoverInterruptedApply(
+        _ transaction: ApplyJournalTransaction
+    ) throws -> ApplyRecoveryResult {
+        guard hasAccessibilityPermission else {
+            throw PaneCueWindowError.accessibilityPermissionRequired
+        }
+        guard !transaction.isCompleted,
+              transaction.resultState == .pending else {
+            throw PaneCueWindowError.operationFailed(
+                details: "This interrupted layout is no longer available."
+            )
+        }
+
+        return try restoreJournalTransaction(
+            transaction,
+            persistPendingCompletion: true
+        )
+    }
+
+    public func restorableJournalTransactionIDs(
+        _ transactions: [ApplyJournalTransaction]
+    ) throws -> Set<UUID> {
+        guard hasAccessibilityPermission else {
+            return []
+        }
+
+        let windows = try eligibleWindows()
+        let candidates = recoveryCandidates(from: windows)
+        let displaySignatures = ScreenGeometry.availableDisplaySignatures
+        return Set(transactions.compactMap { transaction in
+            let plan = ApplyRecoveryPlanner.plan(
+                transaction: transaction,
+                candidates: candidates,
+                availableDisplaySignatures: displaySignatures
+            )
+            return plan.restorableWindowCount > 0 ? transaction.id : nil
+        })
+    }
+
+    public func restoreJournalTransaction(
+        _ transaction: ApplyJournalTransaction
+    ) throws -> ApplyRecoveryResult {
+        guard transaction.isCompleted else {
+            throw PaneCueWindowError.operationFailed(
+                details: "This interrupted layout must use recovery."
+            )
+        }
+        return try restoreJournalTransaction(
+            transaction,
+            persistPendingCompletion: false
+        )
+    }
+
+    private func restoreJournalTransaction(
+        _ transaction: ApplyJournalTransaction,
+        persistPendingCompletion: Bool
+    ) throws -> ApplyRecoveryResult {
+        guard hasAccessibilityPermission else {
+            throw PaneCueWindowError.accessibilityPermissionRequired
+        }
+
+        let windows = try eligibleWindows()
+        let candidates = recoveryCandidates(from: windows)
+        let plan = ApplyRecoveryPlanner.plan(
+            transaction: transaction,
+            candidates: candidates,
+            availableDisplaySignatures:
+                ScreenGeometry.availableDisplaySignatures
+        )
+        let windowsByIdentifier = windows.reduce(
+            into: [String: ManagedWindow]()
+        ) { result, window in
+            let identifier = ephemeralIdentifier(for: window)
+            if result[identifier] == nil {
+                result[identifier] = window
             }
         }
+        var outcomes: [ApplyRecoveryWindowOutcome] = []
 
-        for selection in movedSelections.reversed() {
-            AXHelpers.raise(selection.window.element)
+        for (record, resolution) in zip(
+            transaction.windows,
+            plan.windows
+        ) {
+            let state: ApplyRecoveryOutcomeState
+            switch resolution.state {
+            case let .matched(candidateWindowIdentifier):
+                guard let window = windowsByIdentifier[
+                    candidateWindowIdentifier
+                ] else {
+                    state = .skippedMissing
+                    break
+                }
+                state = restoreJournalWindow(record, to: window)
+            case .missing:
+                state = .skippedMissing
+            case .ambiguous:
+                state = .skippedAmbiguous
+            case .displayUnavailable:
+                state = .skippedDisplayUnavailable
+            }
+            outcomes.append(
+                ApplyRecoveryWindowOutcome(
+                    journalWindowIdentifier: record.windowIdentifier,
+                    state: state
+                )
+            )
         }
 
-        if didAttemptMutation {
-            activeSnapshot = prepared.map(\.snapshot)
-            activeScenarioName = movedSelections.isEmpty
-                ? nil
-                : scenario.name
+        guard persistPendingCompletion else {
+            logger.info("Restored an Apply history record")
+            return ApplyRecoveryResult(
+                transactionID: transaction.id,
+                outcomes: outcomes,
+                didPersistCompletion: true
+            )
         }
 
-        let orderedOutcomes = scenario.windows.compactMap {
-            outcomesBySlot[$0.id]
-        }
-        let result = WorkspaceApplyResult(
-            scenarioName: scenario.name,
-            outcomes: orderedOutcomes,
-            canRollback: didAttemptMutation
+        let provisionalResult = ApplyRecoveryResult(
+            transactionID: transaction.id,
+            outcomes: outcomes,
+            didPersistCompletion: true
         )
-        logger.info("Completed a workspace Apply transaction")
-        return result
+        let windowResults = outcomes.reduce(
+            into: [String: ApplyJournalWindowResultState]()
+        ) { results, outcome in
+            results[outcome.journalWindowIdentifier] =
+                recoveryJournalState(for: outcome.state)
+        }
+        let didPersistCompletion: Bool
+        do {
+            didPersistCompletion = try applyJournal.complete(
+                id: transaction.id,
+                resultState: provisionalResult.resultState,
+                windowResults: windowResults
+            )
+        } catch {
+            didPersistCompletion = false
+        }
+
+        logger.info("Completed an interrupted Apply recovery")
+        return ApplyRecoveryResult(
+            transactionID: transaction.id,
+            outcomes: outcomes,
+            didPersistCompletion: didPersistCompletion
+        )
+    }
+
+    private func recoveryCandidates(
+        from windows: [ManagedWindow]
+    ) -> [ApplyRecoveryCandidate] {
+        windows.map { window in
+            ApplyRecoveryCandidate(
+                windowIdentifier: ephemeralIdentifier(for: window),
+                applicationBundleIdentifier: window.bundleIdentifier,
+                processIdentifier: Int32(window.processIdentifier)
+            )
+        }
     }
 
     public func restorePreviousLayout() throws -> String {
@@ -658,6 +893,218 @@ public final class WindowManager {
             applicationName: window.applicationName,
             windowTitle: window.title
         )
+    }
+
+    private func workspaceInventory(
+        from windows: [ManagedWindow]
+    ) -> [(item: WorkspaceWindowInventoryItem, window: ManagedWindow)] {
+        windows.map { window in
+            (
+                item: WorkspaceWindowInventoryItem(
+                    id: ephemeralIdentifier(for: window),
+                    bundleIdentifier: window.bundleIdentifier,
+                    applicationName: window.applicationName,
+                    role: role(of: window),
+                    display: displayTarget(for: window.frame),
+                    isMinimized: window.isMinimized,
+                    isFullScreen: window.isFullScreen,
+                    canSetFrame: AXHelpers.canSetFrame(on: window.element)
+                ),
+                window: window
+            )
+        }
+    }
+
+    private func ephemeralIdentifier(for window: ManagedWindow) -> String {
+        "window-\(window.processIdentifier)-\(CFHash(window.element))"
+    }
+
+    private func applyJournalRecord(
+        window: ManagedWindow,
+        snapshot: WindowSnapshot
+    ) -> ApplyJournalWindowRecord {
+        ApplyJournalWindowRecord(
+            applicationBundleIdentifier: window.bundleIdentifier,
+            processIdentifier: Int32(window.processIdentifier),
+            windowIdentifier: ephemeralIdentifier(for: window),
+            originalFrame: ApplyJournalFrame(
+                x: snapshot.frame.origin.x,
+                y: snapshot.frame.origin.y,
+                width: snapshot.frame.size.width,
+                height: snapshot.frame.size.height
+            ),
+            originalDisplaySignature: ScreenGeometry.displaySignature(
+                containing: snapshot.frame
+            ),
+            wasVisible: !snapshot.isMinimized,
+            wasMinimized: snapshot.isMinimized
+        )
+    }
+
+    private func workspaceApplyResult(
+        scenario: CustomScenario,
+        outcomesBySlot: [UUID: WorkspaceApplyOutcome],
+        canRollback: Bool
+    ) -> WorkspaceApplyResult {
+        WorkspaceApplyResult(
+            scenarioName: scenario.name,
+            outcomes: scenario.windows.compactMap {
+                outcomesBySlot[$0.id]
+            },
+            canRollback: canRollback
+        )
+    }
+
+    private func applyJournalResultState(
+        for result: WorkspaceApplyResult
+    ) -> ApplyJournalResultState {
+        if result.failedCount > 0 {
+            return result.didChangeAnyWindow ? .partial : .failed
+        }
+        if result.isPartial || result.skippedCount > 0 {
+            return result.didChangeAnyWindow ? .partial : .noChange
+        }
+        return result.didChangeAnyWindow ? .succeeded : .noChange
+    }
+
+    private func applyJournalWindowResults(
+        prepared: [(
+            selection: ResolvedWindowSelection,
+            snapshot: WindowSnapshot
+        )],
+        outcomesBySlot: [UUID: WorkspaceApplyOutcome]
+    ) -> [String: ApplyJournalWindowResultState] {
+        prepared.reduce(into: [:]) { results, preparedSelection in
+            let outcome = outcomesBySlot[
+                preparedSelection.selection.slot.id
+            ]
+            results[
+                ephemeralIdentifier(
+                    for: preparedSelection.selection.window
+                )
+            ] = applyJournalWindowResultState(
+                for: outcome?.status ?? .failed
+            )
+        }
+    }
+
+    private func applyJournalWindowResultState(
+        for status: WorkspaceApplyOutcomeStatus
+    ) -> ApplyJournalWindowResultState {
+        switch status {
+        case .moved:
+            return .moved
+        case .unchanged:
+            return .unchanged
+        case .skipped:
+            return .skipped
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func restoreJournalWindow(
+        _ record: ApplyJournalWindowRecord,
+        to window: ManagedWindow
+    ) -> ApplyRecoveryOutcomeState {
+        let targetFrame = CGRect(
+            x: record.originalFrame.x,
+            y: record.originalFrame.y,
+            width: record.originalFrame.width,
+            height: record.originalFrame.height
+        )
+        guard targetFrame.origin.x.isFinite,
+              targetFrame.origin.y.isFinite,
+              targetFrame.size.width.isFinite,
+              targetFrame.size.height.isFinite,
+              targetFrame.width > 0,
+              targetFrame.height > 0,
+              AXHelpers.frame(of: window.element) != nil,
+              AXHelpers.canSetFrame(on: window.element) else {
+            return .failed
+        }
+
+        let isFullScreen = AXHelpers.copyBool(
+            from: window.element,
+            attribute: AXHelpers.fullScreenAttribute
+        ) ?? false
+        guard !isFullScreen else {
+            return .failed
+        }
+
+        let targetMinimized = record.wasMinimized ?? false
+        let currentMinimized = AXHelpers.copyBool(
+            from: window.element,
+            attribute: kAXMinimizedAttribute as CFString
+        ) ?? false
+        if let currentFrame = AXHelpers.frame(of: window.element),
+           framesApproximatelyEqual(
+               currentFrame,
+               targetFrame,
+               tolerance: 8
+           ),
+           currentMinimized == targetMinimized {
+            return .unchanged
+        }
+
+        do {
+            AXHelpers.setMinimized(false, on: window.element)
+            try AXHelpers.setFrame(targetFrame, on: window.element)
+            var restoredFrame = AXHelpers.frame(of: window.element)
+            if restoredFrame.map({
+                !framesApproximatelyEqual(
+                    $0,
+                    targetFrame,
+                    tolerance: 8
+                )
+            }) ?? true {
+                Thread.sleep(forTimeInterval: 0.12)
+                try AXHelpers.setFrame(targetFrame, on: window.element)
+                restoredFrame = AXHelpers.frame(of: window.element)
+            }
+            guard let restoredFrame,
+                  framesApproximatelyEqual(
+                      restoredFrame,
+                      targetFrame,
+                      tolerance: 8
+                  ) else {
+                return .failed
+            }
+            AXHelpers.setMinimized(targetMinimized, on: window.element)
+            return .restored
+        } catch {
+            logger.error("Could not restore a window from the Apply journal")
+            return .failed
+        }
+    }
+
+    private func recoveryJournalState(
+        for state: ApplyRecoveryOutcomeState
+    ) -> ApplyJournalWindowResultState {
+        switch state {
+        case .restored:
+            return .moved
+        case .unchanged:
+            return .unchanged
+        case .skippedMissing, .skippedAmbiguous,
+             .skippedDisplayUnavailable:
+            return .skipped
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func displayTarget(for frame: CGRect) -> ScenarioDisplayTarget {
+        guard let external = ScreenGeometry
+            .visibleFrameInAccessibilityCoordinates(for: .external),
+              let main = ScreenGeometry
+                .visibleFrameInAccessibilityCoordinates(for: .main) else {
+            return .main
+        }
+        return ScreenGeometry.overlapArea(frame, external)
+            > ScreenGeometry.overlapArea(frame, main)
+            ? .external
+            : .main
     }
 
     private func blockedWindowOutcome(
