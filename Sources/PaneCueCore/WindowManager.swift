@@ -576,42 +576,22 @@ public final class WindowManager {
 
                 didAttemptMutation = true
                 do {
-                    try AXHelpers.setFrame(
-                        selection.targetFrame,
-                        on: window.element
+                    try VerifiedWindowFrameMutation.set(
+                        targetFrame: selection.targetFrame,
+                        applicationName: window.applicationName,
+                        readFrame: {
+                            AXHelpers.frame(of: window.element)
+                        },
+                        writeFrame: {
+                            try AXHelpers.setFrame(
+                                selection.targetFrame,
+                                on: window.element
+                            )
+                        },
+                        settle: {
+                            Thread.sleep(forTimeInterval: 0.12)
+                        }
                     )
-                    var appliedFrame = AXHelpers.frame(of: window.element)
-                    if appliedFrame.map({
-                        !framesApproximatelyEqual(
-                            $0,
-                            selection.targetFrame,
-                            tolerance: 8
-                        )
-                    }) ?? true {
-                        // Notes and some AppKit windows settle their new size
-                        // before accepting the final requested edge.
-                        Thread.sleep(forTimeInterval: 0.12)
-                        try AXHelpers.setFrame(
-                            selection.targetFrame,
-                            on: window.element
-                        )
-                        appliedFrame = AXHelpers.frame(of: window.element)
-                    }
-                    guard let appliedFrame,
-                          framesApproximatelyEqual(
-                              appliedFrame,
-                              selection.targetFrame,
-                              tolerance: 8
-                          ) else {
-                        outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                            id: slot.id,
-                            targetName: slot.target.displayName,
-                            applicationName: window.applicationName,
-                            status: .failed,
-                            reason: "The application constrained the requested size or position."
-                        )
-                        continue
-                    }
                     movedSelections.append(selection)
                     outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                         id: slot.id,
@@ -1049,27 +1029,22 @@ public final class WindowManager {
 
         do {
             AXHelpers.setMinimized(false, on: window.element)
-            try AXHelpers.setFrame(targetFrame, on: window.element)
-            var restoredFrame = AXHelpers.frame(of: window.element)
-            if restoredFrame.map({
-                !framesApproximatelyEqual(
-                    $0,
-                    targetFrame,
-                    tolerance: 8
-                )
-            }) ?? true {
-                Thread.sleep(forTimeInterval: 0.12)
-                try AXHelpers.setFrame(targetFrame, on: window.element)
-                restoredFrame = AXHelpers.frame(of: window.element)
-            }
-            guard let restoredFrame,
-                  framesApproximatelyEqual(
-                      restoredFrame,
-                      targetFrame,
-                      tolerance: 8
-                  ) else {
-                return .failed
-            }
+            try VerifiedWindowFrameMutation.set(
+                targetFrame: targetFrame,
+                applicationName: window.applicationName,
+                readFrame: {
+                    AXHelpers.frame(of: window.element)
+                },
+                writeFrame: {
+                    try AXHelpers.setFrame(
+                        targetFrame,
+                        on: window.element
+                    )
+                },
+                settle: {
+                    Thread.sleep(forTimeInterval: 0.12)
+                }
+            )
             AXHelpers.setMinimized(targetMinimized, on: window.element)
             return .restored
         } catch {
@@ -1309,7 +1284,22 @@ public final class WindowManager {
                             applicationName: window.applicationName
                         )
                     }
-                    try AXHelpers.setFrame(window.frame, on: window.element)
+                    try VerifiedWindowFrameMutation.set(
+                        targetFrame: window.frame,
+                        applicationName: window.applicationName,
+                        readFrame: {
+                            AXHelpers.frame(of: window.element)
+                        },
+                        writeFrame: {
+                            try AXHelpers.setFrame(
+                                window.frame,
+                                on: window.element
+                            )
+                        },
+                        settle: {
+                            Thread.sleep(forTimeInterval: 0.12)
+                        }
+                    )
                 }
 
                 AXHelpers.setMinimized(window.isMinimized, on: window.element)
