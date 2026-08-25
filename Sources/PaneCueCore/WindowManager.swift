@@ -8,6 +8,7 @@ public final class WindowManager {
         let slot: ScenarioWindowSlot
         let window: ManagedWindow
         let targetFrame: CGRect
+        let visibleFrame: CGRect
     }
 
     private let logger = Logger(
@@ -360,7 +361,8 @@ public final class WindowManager {
                         ResolvedWindowSelection(
                             slot: slot,
                             window: window,
-                            targetFrame: targetFrame
+                            targetFrame: targetFrame,
+                            visibleFrame: screenFrame
                         )
                     )
                 }
@@ -585,6 +587,33 @@ public final class WindowManager {
                         writeFrame: {
                             try AXHelpers.setFrame(
                                 selection.targetFrame,
+                                on: window.element
+                            )
+                        },
+                        recoverConstrainedWindow: {
+                            let overlap = ScreenGeometry.overlapArea(
+                                preparedSelection.snapshot.frame,
+                                selection.visibleFrame
+                            )
+                            let placement = SystemWindowPlacement.matching(
+                                targetFrame: selection.targetFrame,
+                                in: selection.visibleFrame
+                            )
+                            if overlap > 0, let placement,
+                               AXHelpers.performSystemPlacement(
+                                   placement,
+                                   on: window.element
+                               ) {
+                                return true
+                            }
+
+                            // A native placement command always acts on the
+                            // window's current display. When the target lives
+                            // on another display (or is not a native half or
+                            // quarter), first leave the macOS-managed layout
+                            // and then apply the exact cross-display frame.
+                            return self.recoverConstrainedWindow(
+                                to: selection.targetFrame,
                                 on: window.element
                             )
                         },
@@ -1041,6 +1070,12 @@ public final class WindowManager {
                         on: window.element
                     )
                 },
+                recoverConstrainedWindow: {
+                    self.recoverConstrainedWindow(
+                        to: targetFrame,
+                        on: window.element
+                    )
+                },
                 settle: {
                     Thread.sleep(forTimeInterval: 0.12)
                 }
@@ -1296,6 +1331,12 @@ public final class WindowManager {
                                 on: window.element
                             )
                         },
+                        recoverConstrainedWindow: {
+                            self.recoverConstrainedWindow(
+                                to: window.frame,
+                                on: window.element
+                            )
+                        },
                         settle: {
                             Thread.sleep(forTimeInterval: 0.12)
                         }
@@ -1314,5 +1355,114 @@ public final class WindowManager {
         }
 
         return failures
+    }
+
+    private func recoverConstrainedWindow(
+        to targetFrame: CGRect,
+        on element: AXUIElement
+    ) -> Bool {
+        let displayFrames = [
+            ScreenGeometry.visibleFrameInAccessibilityCoordinates(
+                for: .main
+            ),
+            ScreenGeometry.visibleFrameInAccessibilityCoordinates(
+                for: .external
+            ),
+        ].compactMap { $0 }
+
+        if displayFrames.contains(where: {
+            VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                $0,
+                targetFrame,
+                tolerance: 8
+            )
+        }) {
+            guard AXHelpers.performSystemFill(on: element) else {
+                return false
+            }
+            Thread.sleep(forTimeInterval: 0.12)
+            if let currentFrame = AXHelpers.frame(of: element),
+               VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                   currentFrame,
+                   targetFrame,
+                   tolerance: 8
+               ) {
+                return true
+            }
+
+            // Fill operates on the window's current display. If the snapshot
+            // came from another display, explicitly move the now-normalized
+            // window back to the recorded screen coordinates.
+            return setAndVerifyRecoveredFrame(
+                targetFrame,
+                on: element
+            )
+        }
+        if AXHelpers.performReturnToPreviousWindowSize(on: element),
+           waitForRecoveredFrame(targetFrame, on: element) {
+            return true
+        }
+
+        guard AXHelpers.performSystemZoom(on: element) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.12)
+        return setAndVerifyRecoveredFrame(targetFrame, on: element)
+    }
+
+    private func waitForRecoveredFrame(
+        _ targetFrame: CGRect,
+        on element: AXUIElement,
+        attemptCount: Int = 4
+    ) -> Bool {
+        for _ in 0 ..< attemptCount {
+            Thread.sleep(forTimeInterval: 0.12)
+            if let recoveredFrame = AXHelpers.frame(of: element),
+               VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                   recoveredFrame,
+                   targetFrame,
+                   tolerance: 8
+               ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func setAndVerifyRecoveredFrame(
+        _ targetFrame: CGRect,
+        on element: AXUIElement
+    ) -> Bool {
+        do {
+            try AXHelpers.setFrame(targetFrame, on: element)
+            for _ in 0 ..< 8 {
+                Thread.sleep(forTimeInterval: 0.15)
+                guard let restoredFrame = AXHelpers.frame(of: element) else {
+                    continue
+                }
+                if VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                    restoredFrame,
+                    targetFrame,
+                    tolerance: 8
+                ) {
+                    return true
+                }
+                try AXHelpers.setPosition(
+                    targetFrame.origin,
+                    on: element
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+            guard let restoredFrame = AXHelpers.frame(of: element) else {
+                return false
+            }
+            return VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                restoredFrame,
+                targetFrame,
+                tolerance: 8
+            )
+        } catch {
+            return false
+        }
     }
 }
