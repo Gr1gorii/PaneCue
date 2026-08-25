@@ -8,13 +8,19 @@ enum VerifiedWindowFrameMutation {
         maximumAttemptCount: Int = 3,
         readFrame: () -> CGRect?,
         writeFrame: () throws -> Void,
+        recoverConstrainedWindow: (() throws -> Bool)? = nil,
         settle: () -> Void
     ) throws {
         let attemptCount = max(1, maximumAttemptCount)
+        var lastWriteError: Error?
 
-        func attemptVerifiedWrites() throws -> Bool {
+        func attemptVerifiedWrites() -> Bool {
             for attempt in 0 ..< attemptCount {
-                try writeFrame()
+                do {
+                    try writeFrame()
+                } catch {
+                    lastWriteError = error
+                }
                 if let appliedFrame = readFrame(),
                    framesApproximatelyEqual(
                        appliedFrame,
@@ -30,8 +36,33 @@ enum VerifiedWindowFrameMutation {
             return false
         }
 
-        if try attemptVerifiedWrites() {
+        if attemptVerifiedWrites() {
             return
+        }
+
+        if let recoverConstrainedWindow,
+           try recoverConstrainedWindow() {
+            // Native Window-menu placements are animated by AppKit. Safari in
+            // particular can report the old frame briefly after accepting the
+            // menu action, so poll before falling back to direct AX writes.
+            for _ in 0 ..< attemptCount {
+                settle()
+                if let recoveredFrame = readFrame(),
+                   framesApproximatelyEqual(
+                       recoveredFrame,
+                       targetFrame,
+                       tolerance: tolerance
+                   ) {
+                    return
+                }
+            }
+            if attemptVerifiedWrites() {
+                return
+            }
+        }
+
+        if let lastWriteError {
+            throw lastWriteError
         }
 
         throw PaneCueWindowError.operationFailed(
