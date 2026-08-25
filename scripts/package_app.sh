@@ -48,7 +48,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-APP_DIR="${PROJECT_DIR}/build/${APP_NAME}.app"
+OUTPUT_APP_DIR="${PROJECT_DIR}/build/${APP_NAME}.app"
+PACKAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/panecue-package.XXXXXX")"
+trap 'rm -rf "${PACKAGE_ROOT}"' EXIT
+APP_DIR="${PACKAGE_ROOT}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
@@ -60,7 +63,6 @@ swift build \
     -c release \
     --product "${PRODUCT_NAME}"
 
-rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RUNTIME_DIR}" "${MODELS_DIR}"
 cp -f \
     "${PROJECT_DIR}/.build/release/${EXECUTABLE_NAME}" \
@@ -110,11 +112,18 @@ else
     )
 fi
 
+# Finder and cloud-backed folders can attach metadata to a freshly assembled
+# bundle. codesign rejects those attributes as unsealed resource metadata.
+xattr -cr "${APP_DIR}"
 codesign "${SIGN_ARGUMENTS[@]}" "${APP_DIR}" >/dev/null
 codesign --verify --deep --strict "${APP_DIR}"
 
+rm -rf "${OUTPUT_APP_DIR}"
+ditto --noextattr "${APP_DIR}" "${OUTPUT_APP_DIR}"
+codesign --verify --deep --strict "${OUTPUT_APP_DIR}"
+
 if [[ "${SIGN_IDENTITY}" == "-" ]]; then
-    echo "${APP_DIR} (${PROFILE}, ad-hoc signed)"
+    echo "${OUTPUT_APP_DIR} (${PROFILE}, ad-hoc signed)"
 else
-    echo "${APP_DIR} (${PROFILE}, signed by ${SIGN_IDENTITY})"
+    echo "${OUTPUT_APP_DIR} (${PROFILE}, signed by ${SIGN_IDENTITY})"
 fi
