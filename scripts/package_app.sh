@@ -11,10 +11,11 @@ INFO_PLIST="${PROJECT_DIR}/Resources/Info.plist"
 BUNDLE_ID="io.github.gr1gorii.PaneCue"
 ENTITLEMENTS="${PROJECT_DIR}/Resources/PaneCue.entitlements"
 SIGN_IDENTITY="${PANECUE_CODESIGN_IDENTITY:--}"
+OUTPUT_DIR="${PROJECT_DIR}/build"
 
 usage() {
     cat <<'EOF'
-usage: package_app.sh [--experimental] [--sign-identity IDENTITY]
+usage: package_app.sh [--experimental] [--sign-identity IDENTITY] [--output-dir DIRECTORY]
 
 Without --sign-identity, the app receives an ad-hoc signature for local use.
 EOF
@@ -37,6 +38,11 @@ while [[ $# -gt 0 ]]; do
             SIGN_IDENTITY="$2"
             shift 2
             ;;
+        --output-dir)
+            [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
         --help|-h)
             usage
             exit 0
@@ -48,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-OUTPUT_APP_DIR="${PROJECT_DIR}/build/${APP_NAME}.app"
+OUTPUT_APP_DIR="${OUTPUT_DIR}/${APP_NAME}.app"
 PACKAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/panecue-package.XXXXXX")"
 trap 'rm -rf "${PACKAGE_ROOT}"' EXIT
 APP_DIR="${PACKAGE_ROOT}/${APP_NAME}.app"
@@ -118,6 +124,7 @@ xattr -cr "${APP_DIR}"
 codesign "${SIGN_ARGUMENTS[@]}" "${APP_DIR}" >/dev/null
 codesign --verify --deep --strict "${APP_DIR}"
 
+mkdir -p "${OUTPUT_DIR}"
 rm -rf "${OUTPUT_APP_DIR}"
 ditto --noextattr "${APP_DIR}" "${OUTPUT_APP_DIR}"
 codesign --verify --deep --strict "${OUTPUT_APP_DIR}"
