@@ -1,5 +1,7 @@
 # PaneCue
 
+Project website: [PaneCue](https://gr1gorii.github.io/PaneCue/)
+
 PaneCue is a privacy-conscious macOS workspace manager that arranges
 application windows around the task you are doing. It combines reusable
 layouts, a visual scenario editor, local automation, floating call or browser
