@@ -3,7 +3,9 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="${PROJECT_DIR}/build/PaneCue.app"
+ACCEPTANCE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/panecue-acceptance.XXXXXX")"
+trap 'rm -rf "${ACCEPTANCE_ROOT}"' EXIT
+APP_DIR="${ACCEPTANCE_ROOT}/PaneCue.app"
 INFO_PLIST="${APP_DIR}/Contents/Info.plist"
 MODEL_FILE="${APP_DIR}/Contents/Resources/Models/panecue-mini-v2.bin"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
@@ -32,7 +34,8 @@ swift build \
     --product PaneCueDialogueBenchmark
 
 echo "[2/7] Packaging the stable v0.2 development candidate"
-"${PROJECT_DIR}/scripts/package_app.sh"
+"${PROJECT_DIR}/scripts/package_app.sh" \
+    --output-dir "${ACCEPTANCE_ROOT}"
 
 echo "[3/7] Verifying the signed application bundle"
 codesign --verify --deep --strict "${APP_DIR}"

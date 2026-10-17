@@ -5,7 +5,6 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 INFO_PLIST="${PROJECT_DIR}/Resources/Info.plist"
-APP_DIR="${PROJECT_DIR}/build/PaneCue.app"
 OUTPUT_DIR="${PROJECT_DIR}/build/release"
 SIGN_IDENTITY="${PANECUE_CODESIGN_IDENTITY:-}"
 NOTARY_PROFILE="${PANECUE_NOTARY_PROFILE:-}"
@@ -92,6 +91,7 @@ ARCHITECTURE="$(uname -m)"
 DMG_NAME="PaneCue-${VERSION}-build${BUILD_NUMBER}-${ARCHITECTURE}.dmg"
 DMG_PATH="${OUTPUT_DIR}/${DMG_NAME}"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/panecue-release.XXXXXX")"
+APP_DIR="${STAGING_DIR}/PaneCue.app"
 
 cleanup() {
     rm -rf "${STAGING_DIR}"
@@ -101,10 +101,11 @@ trap cleanup EXIT
 mkdir -p "${OUTPUT_DIR}"
 rm -f "${DMG_PATH}"
 
-"${PROJECT_DIR}/scripts/package_app.sh" --sign-identity "${SIGN_IDENTITY}"
+"${PROJECT_DIR}/scripts/package_app.sh" \
+    --sign-identity "${SIGN_IDENTITY}" \
+    --output-dir "${STAGING_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
 
-cp -R "${APP_DIR}" "${STAGING_DIR}/PaneCue.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
 
 hdiutil create \

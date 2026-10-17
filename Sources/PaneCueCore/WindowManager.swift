@@ -8,6 +8,7 @@ public final class WindowManager {
         let slot: ScenarioWindowSlot
         let window: ManagedWindow
         let targetFrame: CGRect
+        let visibleFrame: CGRect
     }
 
     private let logger = Logger(
@@ -360,7 +361,8 @@ public final class WindowManager {
                         ResolvedWindowSelection(
                             slot: slot,
                             window: window,
-                            targetFrame: targetFrame
+                            targetFrame: targetFrame,
+                            visibleFrame: screenFrame
                         )
                     )
                 }
@@ -576,42 +578,49 @@ public final class WindowManager {
 
                 didAttemptMutation = true
                 do {
-                    try AXHelpers.setFrame(
-                        selection.targetFrame,
-                        on: window.element
+                    try VerifiedWindowFrameMutation.set(
+                        targetFrame: selection.targetFrame,
+                        applicationName: window.applicationName,
+                        readFrame: {
+                            AXHelpers.frame(of: window.element)
+                        },
+                        writeFrame: {
+                            try AXHelpers.setFrame(
+                                selection.targetFrame,
+                                on: window.element
+                            )
+                        },
+                        recoverConstrainedWindow: {
+                            let overlap = ScreenGeometry.overlapArea(
+                                preparedSelection.snapshot.frame,
+                                selection.visibleFrame
+                            )
+                            let placement = SystemWindowPlacement.matching(
+                                targetFrame: selection.targetFrame,
+                                in: selection.visibleFrame
+                            )
+                            if overlap > 0, let placement,
+                               AXHelpers.performSystemPlacement(
+                                   placement,
+                                   on: window.element
+                               ) {
+                                return true
+                            }
+
+                            // A native placement command always acts on the
+                            // window's current display. When the target lives
+                            // on another display (or is not a native half or
+                            // quarter), first leave the macOS-managed layout
+                            // and then apply the exact cross-display frame.
+                            return self.recoverConstrainedWindow(
+                                to: selection.targetFrame,
+                                on: window.element
+                            )
+                        },
+                        settle: {
+                            Thread.sleep(forTimeInterval: 0.12)
+                        }
                     )
-                    var appliedFrame = AXHelpers.frame(of: window.element)
-                    if appliedFrame.map({
-                        !framesApproximatelyEqual(
-                            $0,
-                            selection.targetFrame,
-                            tolerance: 8
-                        )
-                    }) ?? true {
-                        // Notes and some AppKit windows settle their new size
-                        // before accepting the final requested edge.
-                        Thread.sleep(forTimeInterval: 0.12)
-                        try AXHelpers.setFrame(
-                            selection.targetFrame,
-                            on: window.element
-                        )
-                        appliedFrame = AXHelpers.frame(of: window.element)
-                    }
-                    guard let appliedFrame,
-                          framesApproximatelyEqual(
-                              appliedFrame,
-                              selection.targetFrame,
-                              tolerance: 8
-                          ) else {
-                        outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
-                            id: slot.id,
-                            targetName: slot.target.displayName,
-                            applicationName: window.applicationName,
-                            status: .failed,
-                            reason: "The application constrained the requested size or position."
-                        )
-                        continue
-                    }
                     movedSelections.append(selection)
                     outcomesBySlot[slot.id] = WorkspaceApplyOutcome(
                         id: slot.id,
@@ -1049,27 +1058,28 @@ public final class WindowManager {
 
         do {
             AXHelpers.setMinimized(false, on: window.element)
-            try AXHelpers.setFrame(targetFrame, on: window.element)
-            var restoredFrame = AXHelpers.frame(of: window.element)
-            if restoredFrame.map({
-                !framesApproximatelyEqual(
-                    $0,
-                    targetFrame,
-                    tolerance: 8
-                )
-            }) ?? true {
-                Thread.sleep(forTimeInterval: 0.12)
-                try AXHelpers.setFrame(targetFrame, on: window.element)
-                restoredFrame = AXHelpers.frame(of: window.element)
-            }
-            guard let restoredFrame,
-                  framesApproximatelyEqual(
-                      restoredFrame,
-                      targetFrame,
-                      tolerance: 8
-                  ) else {
-                return .failed
-            }
+            try VerifiedWindowFrameMutation.set(
+                targetFrame: targetFrame,
+                applicationName: window.applicationName,
+                readFrame: {
+                    AXHelpers.frame(of: window.element)
+                },
+                writeFrame: {
+                    try AXHelpers.setFrame(
+                        targetFrame,
+                        on: window.element
+                    )
+                },
+                recoverConstrainedWindow: {
+                    self.recoverConstrainedWindow(
+                        to: targetFrame,
+                        on: window.element
+                    )
+                },
+                settle: {
+                    Thread.sleep(forTimeInterval: 0.12)
+                }
+            )
             AXHelpers.setMinimized(targetMinimized, on: window.element)
             return .restored
         } catch {
@@ -1309,7 +1319,28 @@ public final class WindowManager {
                             applicationName: window.applicationName
                         )
                     }
-                    try AXHelpers.setFrame(window.frame, on: window.element)
+                    try VerifiedWindowFrameMutation.set(
+                        targetFrame: window.frame,
+                        applicationName: window.applicationName,
+                        readFrame: {
+                            AXHelpers.frame(of: window.element)
+                        },
+                        writeFrame: {
+                            try AXHelpers.setFrame(
+                                window.frame,
+                                on: window.element
+                            )
+                        },
+                        recoverConstrainedWindow: {
+                            self.recoverConstrainedWindow(
+                                to: window.frame,
+                                on: window.element
+                            )
+                        },
+                        settle: {
+                            Thread.sleep(forTimeInterval: 0.12)
+                        }
+                    )
                 }
 
                 AXHelpers.setMinimized(window.isMinimized, on: window.element)
@@ -1324,5 +1355,114 @@ public final class WindowManager {
         }
 
         return failures
+    }
+
+    private func recoverConstrainedWindow(
+        to targetFrame: CGRect,
+        on element: AXUIElement
+    ) -> Bool {
+        let displayFrames = [
+            ScreenGeometry.visibleFrameInAccessibilityCoordinates(
+                for: .main
+            ),
+            ScreenGeometry.visibleFrameInAccessibilityCoordinates(
+                for: .external
+            ),
+        ].compactMap { $0 }
+
+        if displayFrames.contains(where: {
+            VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                $0,
+                targetFrame,
+                tolerance: 8
+            )
+        }) {
+            guard AXHelpers.performSystemFill(on: element) else {
+                return false
+            }
+            Thread.sleep(forTimeInterval: 0.12)
+            if let currentFrame = AXHelpers.frame(of: element),
+               VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                   currentFrame,
+                   targetFrame,
+                   tolerance: 8
+               ) {
+                return true
+            }
+
+            // Fill operates on the window's current display. If the snapshot
+            // came from another display, explicitly move the now-normalized
+            // window back to the recorded screen coordinates.
+            return setAndVerifyRecoveredFrame(
+                targetFrame,
+                on: element
+            )
+        }
+        if AXHelpers.performReturnToPreviousWindowSize(on: element),
+           waitForRecoveredFrame(targetFrame, on: element) {
+            return true
+        }
+
+        guard AXHelpers.performSystemZoom(on: element) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.12)
+        return setAndVerifyRecoveredFrame(targetFrame, on: element)
+    }
+
+    private func waitForRecoveredFrame(
+        _ targetFrame: CGRect,
+        on element: AXUIElement,
+        attemptCount: Int = 4
+    ) -> Bool {
+        for _ in 0 ..< attemptCount {
+            Thread.sleep(forTimeInterval: 0.12)
+            if let recoveredFrame = AXHelpers.frame(of: element),
+               VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                   recoveredFrame,
+                   targetFrame,
+                   tolerance: 8
+               ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func setAndVerifyRecoveredFrame(
+        _ targetFrame: CGRect,
+        on element: AXUIElement
+    ) -> Bool {
+        do {
+            try AXHelpers.setFrame(targetFrame, on: element)
+            for _ in 0 ..< 8 {
+                Thread.sleep(forTimeInterval: 0.15)
+                guard let restoredFrame = AXHelpers.frame(of: element) else {
+                    continue
+                }
+                if VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                    restoredFrame,
+                    targetFrame,
+                    tolerance: 8
+                ) {
+                    return true
+                }
+                try AXHelpers.setPosition(
+                    targetFrame.origin,
+                    on: element
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+            guard let restoredFrame = AXHelpers.frame(of: element) else {
+                return false
+            }
+            return VerifiedWindowFrameMutation.framesApproximatelyEqual(
+                restoredFrame,
+                targetFrame,
+                tolerance: 8
+            )
+        } catch {
+            return false
+        }
     }
 }
